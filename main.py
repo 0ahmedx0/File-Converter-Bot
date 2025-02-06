@@ -11,14 +11,10 @@ import threading
 import time
 
 from buttons import *
-import aifunctions
-import helperfunctions
+
 import mediainfo
-import guess
-import tormag
+
 import progconv
-import others
-import tictactoe
 
 
 # env
