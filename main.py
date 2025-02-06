@@ -2,7 +2,7 @@ import pyrogram
 from pyrogram import Client
 from pyrogram import filters
 from pyrogram import enums
-from pyrogram.types import InlineKeyboardMarkup,InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import os
 import shutil
@@ -10,15 +10,19 @@ import subprocess
 import threading
 import time
 
-from buttons import *
-import aifunctions
-import helperfunctions
-import mediainfo
-import guess
-import tormag
-import progconv
-import others
-import tictactoe
+# Remove the following imports as they are not related to file conversion
+# import aifunctions
+# import helperfunctions
+# import mediainfo
+# import guess
+# import tormag
+# import progconv
+# import others
+# import tictactoe
+
+# Add imports for file conversion-related modules here if needed
+# For example, add the module that handles file conversions such as FFmpeg or others
+
 
 
 # env
