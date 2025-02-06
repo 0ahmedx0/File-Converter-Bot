@@ -2,7 +2,7 @@ import pyrogram
 from pyrogram import Client
 from pyrogram import filters
 from pyrogram import enums
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup,InlineKeyboardButton
 
 import os
 import shutil
@@ -10,23 +10,15 @@ import subprocess
 import threading
 import time
 
-# حفظ فقط الاستدعاءات المتعلقة بتحويل الملفات
-import progconv   # لاستدعاء الدوال الخاصة بتحويل الملفات
-import mediainfo  # للحصول على معلومات عن الوسائط (في حال كنت تحتاجها في تحويل الفيديوهات/الصور)
-# import any other modules that are relevant to file conversion
-# تأكد من إضافة أو تعديل المكتبات التي تتعلق بالتحويل هنا
-from buttons.py import
-# حذف أو تعليق الاستدعاءات الخاصة بالميزات الأخرى غير المطلوبة
-# مثل:
-# import aifunctions
-# import helperfunctions
-# import guess
-# import tormag
-# import others
-# import tictactoe
-
-# قم بتعديل باقي الكود ليتعامل فقط مع تحويل الملفات
-
+from buttons import *
+import aifunctions
+import helperfunctions
+import mediainfo
+import guess
+import tormag
+import progconv
+import others
+import tictactoe
 
 
 # env
