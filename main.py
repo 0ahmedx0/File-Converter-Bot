@@ -10,18 +10,22 @@ import subprocess
 import threading
 import time
 
-# Remove the following imports as they are not related to file conversion
+# حفظ فقط الاستدعاءات المتعلقة بتحويل الملفات
+import progconv   # لاستدعاء الدوال الخاصة بتحويل الملفات
+import mediainfo  # للحصول على معلومات عن الوسائط (في حال كنت تحتاجها في تحويل الفيديوهات/الصور)
+# import any other modules that are relevant to file conversion
+# تأكد من إضافة أو تعديل المكتبات التي تتعلق بالتحويل هنا
+
+# حذف أو تعليق الاستدعاءات الخاصة بالميزات الأخرى غير المطلوبة
+# مثل:
 # import aifunctions
 # import helperfunctions
-# import mediainfo
 # import guess
 # import tormag
-# import progconv
 # import others
 # import tictactoe
 
-# Add imports for file conversion-related modules here if needed
-# For example, add the module that handles file conversions such as FFmpeg or others
+# قم بتعديل باقي الكود ليتعامل فقط مع تحويل الملفات
 
 
 
