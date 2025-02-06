@@ -11,7 +11,7 @@ import threading
 import time
 
 from buttons import *
-import aifunctions
+# import aifunctions
 import helperfunctions
 import mediainfo
 import guess
