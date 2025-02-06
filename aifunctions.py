@@ -590,7 +590,8 @@ points = os.path.join(os.path.dirname(__file__), points)
 prototxt = os.path.join(os.path.dirname(__file__), prototxt)
 model = os.path.join(os.path.dirname(__file__), model)
 net = cv2.dnn.readNetFromCaffe(prototxt, model)     # load model from disk
-pts = np.load(points)
+pts = np.load(points, allow_pickle=True)
+
 
 # add the cluster centers as 1x1 convolutions to the model
 class8 = net.getLayerId("class8_ab")
