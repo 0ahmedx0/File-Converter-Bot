@@ -15,7 +15,7 @@ import progconv   # لاستدعاء الدوال الخاصة بتحويل ال
 import mediainfo  # للحصول على معلومات عن الوسائط (في حال كنت تحتاجها في تحويل الفيديوهات/الصور)
 # import any other modules that are relevant to file conversion
 # تأكد من إضافة أو تعديل المكتبات التي تتعلق بالتحويل هنا
-import buttons.py
+from buttons.py import
 # حذف أو تعليق الاستدعاءات الخاصة بالميزات الأخرى غير المطلوبة
 # مثل:
 # import aifunctions
