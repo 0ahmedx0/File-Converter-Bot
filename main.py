@@ -1220,13 +1220,12 @@ def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_m
 
 
 # video note
-@app.on_message(filters.video_note)
-def videonote(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    saveMsg(message, "VIDEO_NOTE")
-    app.send_message(message.chat.id,
-                f'__Detected Extension:__ **MP4** 📹 / 🔊\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{VA_TEXT}__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
-                reply_markup=VAboard, reply_to_message_id=message.id)
-
+@app.on_message(filters.video)
+def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    saveMsg(message, "VIDEO")  # حفظ الرسالة
+    oldm = app.send_message(message.chat.id, '__Sending in Stream Format__', reply_to_message_id=message.id)
+    sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
+    sv.start()
 
 # audio
 @app.on_message(filters.audio)
