@@ -1201,23 +1201,15 @@ def annimations(client: pyrogram.client.Client, message: pyrogram.types.messages
 # video
 @app.on_message(filters.video)
 def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    # حفظ الرسالة كفيديو
+    saveMsg(message, "VIDEO")
     
-    try:
-        if message.video.file_name.upper().endswith(VIDAUD):
-            saveMsg(message, "VIDEO")
-            dext = message.video.file_name.split(".")[-1].upper()
-            app.send_message(message.chat.id,
-                            f'__Detected Extension:__ **{dext}** 📹 / 🔊\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{VA_TEXT}__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
-                            reply_markup=VAboard, reply_to_message_id=message.id)
-        else:
-            app.send_message(message.chat.id, f'--**Available formats**--:\n\n**VIDEOS/AUDIOS** 📹 / 🔊\n__{VA_TEXT}__',
-                            reply_to_message_id=message.id)
-   
-    except:
-        oldm = app.send_message(message.chat.id,'**Turning it into Document then you can use that to Convert**',reply_markup=ReplyKeyboardRemove())
-        sd = threading.Thread(target=lambda:senddoc(message,oldm),daemon=True)
-        sd.start()
-
+    # إرسال رسالة مؤقتة للمستخدم تشير إلى أن الفيديو يتم إرساله
+    oldm = app.send_message(message.chat.id, '__Sending in Stream Format__', reply_to_message_id=message.id)
+    
+    # تشغيل وظيفة sendvideo في خيط جديد
+    sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
+    sv.start()
 
 # video note
 @app.on_message(filters.video)
