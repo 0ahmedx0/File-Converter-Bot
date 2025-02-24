@@ -11,7 +11,7 @@ import threading
 import time
 
 from buttons import *
-import aifunctions
+# import aifunctions
 import helperfunctions
 import mediainfo
 import guess
@@ -1211,7 +1211,6 @@ def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_m
     # تشغيل وظيفة sendvideo في خيط جديد
     sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
     sv.start()
-
 
 # video note
 @app.on_message(filters.video_note)
