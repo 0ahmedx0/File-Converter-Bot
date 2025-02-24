@@ -20,6 +20,10 @@ import progconv
 import others
 import tictactoe
 
+# قائمة لتخزين الخيوط النشطة
+active_threads = []
+MAX_THREADS = 50  # الحد الأقصى لعدد الخيوط النشطة
+semaphore = threading.Semaphore(MAX_THREADS)  # للتحكم في عدد الخيوط النشطة
 
 # env
 bot_token = os.environ.get("TOKEN", "") 
@@ -1198,18 +1202,40 @@ def annimations(client: pyrogram.client.Client, message: pyrogram.types.messages
     sd.start()
 
 
-# video
 @app.on_message(filters.video)
 def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    # حفظ الرسالة كفيديو
-    saveMsg(message, "VIDEO")
-    
-    # إرسال رسالة مؤقتة للمستخدم تشير إلى أن الفيديو يتم إرساله
-    oldm = app.send_message(message.chat.id, '__Sending in Stream Format__', reply_to_message_id=message.id)
-    
-    # تشغيل وظيفة sendvideo في خيط جديد
-    sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
-    sv.start()
+    # حجز مكان في السيمافور
+    semaphore.acquire()
+
+    # إنشاء خيط جديد لمعالجة الفيديو
+    thread = threading.Thread(target=process_video, args=(message,), daemon=True)
+    thread.start()
+
+    # إضافة الخيط إلى قائمة الخيوط النشطة
+    active_threads.append(thread)
+
+    # تنظيف الخيوط المنتهية
+    cleanup_threads()
+
+def process_video(message):
+    try:
+        # حفظ الرسالة كفيديو
+        saveMsg(message, "VIDEO")
+
+        # إرسال رسالة مؤقتة للمستخدم تشير إلى أن الفيديو يتم إرساله
+        oldm = app.send_message(message.chat.id, '__Sending in Stream Format__', reply_to_message_id=message.id)
+
+        # تشغيل وظيفة sendvideo
+        sendvideo(message, oldm)
+    except Exception as e:
+        app.send_message(message.chat.id, f"__Error while processing video: {e}__", reply_to_message_id=message.id)
+    finally:
+        # تحرير السيمافور بعد انتهاء العملية
+        semaphore.release()
+
+def cleanup_threads():
+    # إزالة الخيوط المنتهية من القائمة
+    active_threads[:] = [t for t in active_threads if t.is_alive()]
 
 # video note
 @app.on_message(filters.video)
