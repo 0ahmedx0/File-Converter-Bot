@@ -1219,16 +1219,21 @@ def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_m
 
 def process_video(message):
     try:
+        # حجز مكان في السيمافور
+        semaphore.acquire()
+
         # حفظ الرسالة كفيديو
         saveMsg(message, "VIDEO")
 
-        # إرسال رسالة مؤقتة للمستخدم تشير إلى أن الفيديو يتم إرساله
-        oldm = app.send_message(message.chat.id, '__Sending in Stream Format__', reply_to_message_id=message.id)
+        # إرسال رسالة مؤقتة للمستخدم
+        oldm = app.send_message(message.chat.id, '__Processing Video__', reply_to_message_id=message.id)
 
         # تشغيل وظيفة sendvideo
         sendvideo(message, oldm)
+
     except Exception as e:
         app.send_message(message.chat.id, f"__Error while processing video: {e}__", reply_to_message_id=message.id)
+
     finally:
         # تحرير السيمافور بعد انتهاء العملية
         semaphore.release()
