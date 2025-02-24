@@ -11,7 +11,7 @@ import threading
 import time
 
 from buttons import *
-# import aifunctions
+import aifunctions
 import helperfunctions
 import mediainfo
 import guess
@@ -20,12 +20,12 @@ import progconv
 import others
 import tictactoe
 
-# قائمة لتخزين الخيوط النشطة
-active_threads = []
-MAX_THREADS = 50  # الحد الأقصى لعدد الخيوط النشطة
-semaphore = threading.Semaphore(MAX_THREADS)  # للتحكم في عدد الخيوط النشطة
-# قائمة لتخزين ملفات المستخدمين
-media_queue = {}
+# تعريف قوائم الانتظار والخيوط
+media_queue = {}  # لتخزين قائمة انتظار لكل مستخدم
+lock = threading.Lock()  # لتأمين الوصول المتزامن
+MAX_THREADS = 3  # الحد الأقصى لعدد الخيوط النشطة
+semaphore = threading.Semaphore(MAX_THREADS)  # للتحكم في عدد الخيوط
+
 # env
 bot_token = os.environ.get("TOKEN", "") 
 api_hash = os.environ.get("HASH", "") 
@@ -36,33 +36,6 @@ api_id = os.environ.get("ID", "")
 app = Client("my_bot",api_id=api_id, api_hash=api_hash,bot_token=bot_token)
 MESGS = {}
 
-
-def add_to_media_queue(user_id, file_id):
-    # إنشاء قائمة جديدة إذا لم يكن لدى المستخدم قائمة
-    if user_id not in media_queue:
-        media_queue[user_id] = []
-
-    # إضافة الملف إلى قائمة المستخدم
-    media_queue[user_id].append(file_id)
-
-    # التحقق مما إذا تم الوصول إلى الحد الأقصى (9 ملفات)
-    if len(media_queue[user_id]) >= 9:
-        send_album(user_id)
-
-def send_album(user_id):
-    # التحقق من وجود ملفات في قائمة المستخدم
-    if user_id in media_queue and media_queue[user_id]:
-        try:
-            # إرسال الألبوم
-            app.send_media_group(
-                chat_id=user_id,
-                media=[{"type": "photo", "media": file_id} for file_id in media_queue[user_id]]
-            )
-        except Exception as e:
-            print(f"Error sending album: {e}")
-
-        # مسح قائمة الملفات بعد الإرسال
-        del media_queue[user_id]
 
 # msgs functions
 def saveMsg(msg, msg_type):
@@ -468,20 +441,48 @@ def readf(message,oldmessage):
 
 # send video
 def sendvideo(message, oldmessage):
+    # تنزيل الفيديو
     file, msg = down(message)
-    thumb, duration, width, height = mediainfo.allinfo(file)
-    
-    # رفع الفيديو
-    up(message, file, msg, video=True, capt=f'**{file.split("/")[-1]}**', thumb=thumb, duration=duration, height=height, widht=width)
 
-    # حذف الرسالة المؤقتة
+    # الحصول على معلومات الفيديو (الصورة المصغرة، المدة، العرض، الارتفاع)
+    thumb, duration, width, height = mediainfo.allinfo(file)
+
+    # رفع الفيديو مع الصورة المصغرة
+    up(
+        message,
+        file,
+        msg,
+        video=True,
+        capt=f'**{file.split("/")[-1]}**',
+        thumb=thumb,
+        duration=duration,
+        height=height,
+        widht=width
+    )
+
+    # حذف الرسائل المؤقتة وإزالة الملف بعد الإرسال
     app.delete_messages(message.chat.id, message_ids=oldmessage.id)
-    
-    # حذف الملف المؤقت
     os.remove(file)
 
-    # إضافة تأخير زمني لمدة ثانيتين
-    time.sleep(2)
+    # إرجاع المسار المؤقت للملف المعالج
+    return file
+def send_album(user_id):
+    with lock:
+        files = media_queue[user_id]["processed_files"][:10]  # الحصول على أول 10 ملفات
+        media_queue[user_id]["processed_files"] = media_queue[user_id]["processed_files"][10:]  # إزالة الملفات المرسلة
+
+    # إنشاء الألبوم وإرساله
+    app.send_media_group(
+        chat_id=user_id,
+        media=[InputMediaVideo(file) for file in files]
+    )
+
+    # تأخير الإرسال بمقدار 10 ثوانٍ
+    time.sleep(10)
+
+    # إزالة الملفات المؤقتة
+    for file in files:
+        os.remove(file)
 
 # send document
 def senddoc(message,oldmessage):
@@ -1235,54 +1236,63 @@ def annimations(client: pyrogram.client.Client, message: pyrogram.types.messages
     oldm = app.send_message(message.chat.id,'**Turning it into Document then you can use that to Convert**',reply_markup=ReplyKeyboardRemove(), reply_to_message_id=message.id)
     sd = threading.Thread(target=lambda:senddoc(message,oldm),daemon=True)
     sd.start()
+def process_media(user_id):
+    def worker():
+        while True:
+            semaphore.acquire()  # الحصول على تصريح لتشغيل الخيط
+            try:
+                with lock:
+                    if user_id not in media_queue or not media_queue[user_id]["files"]:
+                        break  # إنهاء الخيط إذا كانت القائمة فارغة
 
+                    message = media_queue[user_id]["files"].pop(0)  # الحصول على أول فيديو في القائمة
 
+                # معالجة الفيديو باستخدام sendvideo()
+                oldm = app.send_message(chat_id=user_id, text="__Processing video...__")
+                processed_file = sendvideo(message, oldm)
+
+                # إضافة الفيديو المعالج إلى قائمة الألبوم
+                with lock:
+                    media_queue[user_id].setdefault("processed_files", []).append(processed_file)
+
+                    # إذا تم جمع 10 ملفات، إنشاء ألبوم وإرساله
+                    if len(media_queue[user_id]["processed_files"]) >= 10:
+                        send_album(user_id)
+
+            except FloodWait as e:
+                print(f"FloodWait: Sleeping for {e.value} seconds")
+                time.sleep(e.value)  # إيقاف تشغيل البوت مؤقتًا
+            finally:
+                semaphore.release()  # تحرير التصريح
+
+    # تشغيل الخيوط
+    threading.Thread(target=worker, daemon=True).start()
+    
+# video
 @app.on_message(filters.video)
 def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    # الحصول على معرف الملف
-    file_id = message.video.file_id
+    user_id = message.from_user.id
 
-    # إضافة الملف إلى قائمة media_queue
-    add_to_media_queue(message.from_user.id, file_id)
+    # إضافة الفيديو إلى قائمة الانتظار
+    with lock:
+        if user_id not in media_queue:
+            media_queue[user_id] = {"files": []}
+        media_queue[user_id]["files"].append(message)
 
-    # إرسال رسالة تأكيد للمستخدم
+    # إشعار المستخدم بأن الفيديو تم تخزينه في قائمة الانتظار
     app.send_message(message.chat.id, "__Your video has been added to the queue.__", reply_to_message_id=message.id)
 
-def process_video(message):
-    try:
-        # حجز مكان في السيمافور
-        semaphore.acquire()
-
-        # حفظ الرسالة كفيديو
-        saveMsg(message, "VIDEO")
-
-        # إرسال رسالة مؤقتة للمستخدم
-        oldm = app.send_message(message.chat.id, '__Processing Video__', reply_to_message_id=message.id)
-
-        # تشغيل وظيفة sendvideo
-        sendvideo(message, oldm)
-
-    except Exception as e:
-        app.send_message(message.chat.id, f"__Error while processing video: {e}__", reply_to_message_id=message.id)
-
-    finally:
-        # تحرير السيمافور بعد انتهاء العملية
-        semaphore.release()
-
-        # إضافة تأخير زمني لمدة ثانيتين
-        time.sleep(2)
-	    
-def cleanup_threads():
-    # إزالة الخيوط المنتهية من القائمة
-    active_threads[:] = [t for t in active_threads if t.is_alive()]
+    # بدء معالجة الفيديوهات إذا لم تكن هناك عملية معالجة نشطة
+    process_media(user_id)
 
 # video note
-@app.on_message(filters.video)
-def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    saveMsg(message, "VIDEO")  # حفظ الرسالة
-    oldm = app.send_message(message.chat.id, '__Sending in Stream Format__', reply_to_message_id=message.id)
-    sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
-    sv.start()
+@app.on_message(filters.video_note)
+def videonote(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    saveMsg(message, "VIDEO_NOTE")
+    app.send_message(message.chat.id,
+                f'__Detected Extension:__ **MP4** 📹 / 🔊\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{VA_TEXT}__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
+                reply_markup=VAboard, reply_to_message_id=message.id)
+
 
 # audio
 @app.on_message(filters.audio)
@@ -1310,14 +1320,11 @@ def voice(client: pyrogram.client.Client, message: pyrogram.types.messages_and_m
 # photo
 @app.on_message(filters.photo)
 def photo(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    # الحصول على معرف الملف
-    file_id = message.photo.file_id
+    saveMsg(message, "PHOTO")
+    app.send_message(message.chat.id,
+                     f'__Detected Extension:__ **JPG** 📷\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{IMG_TEXT}__\n\n**SPECIAL** 🎁\n__Colorize, Positive, Upscale & Scan__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
+                     reply_markup=IMGboard, reply_to_message_id=message.id)
 
-    # إضافة الملف إلى قائمة media_queue
-    add_to_media_queue(message.from_user.id, file_id)
-
-    # إرسال رسالة تأكيد للمستخدم
-    app.send_message(message.chat.id, "__Your photo has been added to the queue.__", reply_to_message_id=message.id)
 
 # sticker
 @app.on_message(filters.sticker)
