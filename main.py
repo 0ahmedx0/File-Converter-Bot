@@ -439,14 +439,21 @@ def readf(message,oldmessage):
 
 
 # send video
-def sendvideo(message,oldmessage):
+def sendvideo(message, oldmessage):
     file, msg = down(message)
-    thumb,duration,width,height = mediainfo.allinfo(file)
-    up(message, file, msg, video=True, capt=f'**{file.split("/")[-1]}**' ,thumb=thumb, duration=duration, height=height, widht=width)
+    thumb, duration, width, height = mediainfo.allinfo(file)
+    
+    # رفع الفيديو
+    up(message, file, msg, video=True, capt=f'**{file.split("/")[-1]}**', thumb=thumb, duration=duration, height=height, widht=width)
 
+    # حذف الرسالة المؤقتة
     app.delete_messages(message.chat.id, message_ids=oldmessage.id)
+    
+    # حذف الملف المؤقت
     os.remove(file)
 
+    # إضافة تأخير زمني لمدة ثانيتين
+    time.sleep(2)
 
 # send document
 def senddoc(message,oldmessage):
@@ -1238,6 +1245,9 @@ def process_video(message):
         # تحرير السيمافور بعد انتهاء العملية
         semaphore.release()
 
+        # إضافة تأخير زمني لمدة ثانيتين
+        time.sleep(2)
+	    
 def cleanup_threads():
     # إزالة الخيوط المنتهية من القائمة
     active_threads[:] = [t for t in active_threads if t.is_alive()]
