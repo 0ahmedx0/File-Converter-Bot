@@ -24,7 +24,8 @@ import tictactoe
 active_threads = []
 MAX_THREADS = 50  # الحد الأقصى لعدد الخيوط النشطة
 semaphore = threading.Semaphore(MAX_THREADS)  # للتحكم في عدد الخيوط النشطة
-
+# قائمة لتخزين ملفات المستخدمين
+media_queue = {}
 # env
 bot_token = os.environ.get("TOKEN", "") 
 api_hash = os.environ.get("HASH", "") 
@@ -35,6 +36,33 @@ api_id = os.environ.get("ID", "")
 app = Client("my_bot",api_id=api_id, api_hash=api_hash,bot_token=bot_token)
 MESGS = {}
 
+
+def add_to_media_queue(user_id, file_id):
+    # إنشاء قائمة جديدة إذا لم يكن لدى المستخدم قائمة
+    if user_id not in media_queue:
+        media_queue[user_id] = []
+
+    # إضافة الملف إلى قائمة المستخدم
+    media_queue[user_id].append(file_id)
+
+    # التحقق مما إذا تم الوصول إلى الحد الأقصى (9 ملفات)
+    if len(media_queue[user_id]) >= 9:
+        send_album(user_id)
+
+def send_album(user_id):
+    # التحقق من وجود ملفات في قائمة المستخدم
+    if user_id in media_queue and media_queue[user_id]:
+        try:
+            # إرسال الألبوم
+            app.send_media_group(
+                chat_id=user_id,
+                media=[{"type": "photo", "media": file_id} for file_id in media_queue[user_id]]
+            )
+        except Exception as e:
+            print(f"Error sending album: {e}")
+
+        # مسح قائمة الملفات بعد الإرسال
+        del media_queue[user_id]
 
 # msgs functions
 def saveMsg(msg, msg_type):
@@ -1211,18 +1239,14 @@ def annimations(client: pyrogram.client.Client, message: pyrogram.types.messages
 
 @app.on_message(filters.video)
 def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    # حجز مكان في السيمافور
-    semaphore.acquire()
+    # الحصول على معرف الملف
+    file_id = message.video.file_id
 
-    # إنشاء خيط جديد لمعالجة الفيديو
-    thread = threading.Thread(target=process_video, args=(message,), daemon=True)
-    thread.start()
+    # إضافة الملف إلى قائمة media_queue
+    add_to_media_queue(message.from_user.id, file_id)
 
-    # إضافة الخيط إلى قائمة الخيوط النشطة
-    active_threads.append(thread)
-
-    # تنظيف الخيوط المنتهية
-    cleanup_threads()
+    # إرسال رسالة تأكيد للمستخدم
+    app.send_message(message.chat.id, "__Your video has been added to the queue.__", reply_to_message_id=message.id)
 
 def process_video(message):
     try:
@@ -1286,11 +1310,14 @@ def voice(client: pyrogram.client.Client, message: pyrogram.types.messages_and_m
 # photo
 @app.on_message(filters.photo)
 def photo(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    saveMsg(message, "PHOTO")
-    app.send_message(message.chat.id,
-                     f'__Detected Extension:__ **JPG** 📷\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{IMG_TEXT}__\n\n**SPECIAL** 🎁\n__Colorize, Positive, Upscale & Scan__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
-                     reply_markup=IMGboard, reply_to_message_id=message.id)
+    # الحصول على معرف الملف
+    file_id = message.photo.file_id
 
+    # إضافة الملف إلى قائمة media_queue
+    add_to_media_queue(message.from_user.id, file_id)
+
+    # إرسال رسالة تأكيد للمستخدم
+    app.send_message(message.chat.id, "__Your photo has been added to the queue.__", reply_to_message_id=message.id)
 
 # sticker
 @app.on_message(filters.sticker)
