@@ -20,11 +20,6 @@ import progconv
 import others
 import tictactoe
 
-# تعريف قوائم الانتظار والخيوط
-media_queue = {}  # لتخزين قائمة انتظار لكل مستخدم
-lock = threading.Lock()  # لتأمين الوصول المتزامن
-MAX_THREADS = 3  # الحد الأقصى لعدد الخيوط النشطة
-semaphore = threading.Semaphore(MAX_THREADS)  # للتحكم في عدد الخيوط
 
 # env
 bot_token = os.environ.get("TOKEN", "") 
@@ -440,49 +435,14 @@ def readf(message,oldmessage):
 
 
 # send video
-def sendvideo(message, oldmessage):
-    # تنزيل الفيديو
+def sendvideo(message,oldmessage):
     file, msg = down(message)
+    thumb,duration,width,height = mediainfo.allinfo(file)
+    up(message, file, msg, video=True, capt=f'**{file.split("/")[-1]}**' ,thumb=thumb, duration=duration, height=height, widht=width)
 
-    # الحصول على معلومات الفيديو (الصورة المصغرة، المدة، العرض، الارتفاع)
-    thumb, duration, width, height = mediainfo.allinfo(file)
-
-    # رفع الفيديو مع الصورة المصغرة
-    up(
-        message,
-        file,
-        msg,
-        video=True,
-        capt=f'**{file.split("/")[-1]}**',
-        thumb=thumb,
-        duration=duration,
-        height=height,
-        widht=width
-    )
-
-    # حذف الرسائل المؤقتة وإزالة الملف بعد الإرسال
     app.delete_messages(message.chat.id, message_ids=oldmessage.id)
     os.remove(file)
 
-    # إرجاع المسار المؤقت للملف المعالج
-    return file
-def send_album(user_id):
-    with lock:
-        files = media_queue[user_id]["processed_files"][:10]  # الحصول على أول 10 ملفات
-        media_queue[user_id]["processed_files"] = media_queue[user_id]["processed_files"][10:]  # إزالة الملفات المرسلة
-
-    # إنشاء الألبوم وإرساله
-    app.send_media_group(
-        chat_id=user_id,
-        media=[InputMediaVideo(file) for file in files]
-    )
-
-    # تأخير الإرسال بمقدار 10 ثوانٍ
-    time.sleep(10)
-
-    # إزالة الملفات المؤقتة
-    for file in files:
-        os.remove(file)
 
 # send document
 def senddoc(message,oldmessage):
@@ -1236,54 +1196,22 @@ def annimations(client: pyrogram.client.Client, message: pyrogram.types.messages
     oldm = app.send_message(message.chat.id,'**Turning it into Document then you can use that to Convert**',reply_markup=ReplyKeyboardRemove(), reply_to_message_id=message.id)
     sd = threading.Thread(target=lambda:senddoc(message,oldm),daemon=True)
     sd.start()
-def process_media(user_id):
-    def worker():
-        while True:
-            semaphore.acquire()  # الحصول على تصريح لتشغيل الخيط
-            try:
-                with lock:
-                    if user_id not in media_queue or not media_queue[user_id]["files"]:
-                        break  # إنهاء الخيط إذا كانت القائمة فارغة
 
-                    message = media_queue[user_id]["files"].pop(0)  # الحصول على أول فيديو في القائمة
 
-                # معالجة الفيديو باستخدام sendvideo()
-                oldm = app.send_message(chat_id=user_id, text="__Processing video...__")
-                processed_file = sendvideo(message, oldm)
-
-                # إضافة الفيديو المعالج إلى قائمة الألبوم
-                with lock:
-                    media_queue[user_id].setdefault("processed_files", []).append(processed_file)
-
-                    # إذا تم جمع 10 ملفات، إنشاء ألبوم وإرساله
-                    if len(media_queue[user_id]["processed_files"]) >= 10:
-                        send_album(user_id)
-
-            except FloodWait as e:
-                print(f"FloodWait: Sleeping for {e.value} seconds")
-                time.sleep(e.value)  # إيقاف تشغيل البوت مؤقتًا
-            finally:
-                semaphore.release()  # تحرير التصريح
-
-    # تشغيل الخيوط
-    threading.Thread(target=worker, daemon=True).start()
-    
 # video
 @app.on_message(filters.video)
+@app.on_message(filters.video)
 def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    user_id = message.from_user.id
+    # حفظ الرسالة كفيديو
+    saveMsg(message, "VIDEO")
+    
+    # إرسال رسالة مؤقتة للمستخدم تشير إلى أن الفيديو يتم إرساله
+    oldm = app.send_message(message.chat.id, '__Sending in Stream Format__', reply_to_message_id=message.id)
+    
+    # تشغيل وظيفة sendvideo في خيط جديد
+    sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
+    sv.start()
 
-    # إضافة الفيديو إلى قائمة الانتظار
-    with lock:
-        if user_id not in media_queue:
-            media_queue[user_id] = {"files": []}
-        media_queue[user_id]["files"].append(message)
-
-    # إشعار المستخدم بأن الفيديو تم تخزينه في قائمة الانتظار
-    app.send_message(message.chat.id, "__Your video has been added to the queue.__", reply_to_message_id=message.id)
-
-    # بدء معالجة الفيديوهات إذا لم تكن هناك عملية معالجة نشطة
-    process_media(user_id)
 
 # video note
 @app.on_message(filters.video_note)
