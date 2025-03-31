@@ -54,7 +54,7 @@ def follow(message,inputt,new,old,oldmessage):
         print("It is VID/AUD option")
 
         file,msg = down(message)
-        srclink = helperfunctions.videoinfo(file)
+        srclink = helperfunctions.videoinfo(file) # لا يزال يُحسب لكنه لن يُستخدم في الوصف
         cmd = helperfunctions.ffmpegcommand(file,output,new)
 
         if msg != None:
@@ -62,15 +62,18 @@ def follow(message,inputt,new,old,oldmessage):
 
         os.system(cmd)
         os.remove(file)
-        conlink = helperfunctions.videoinfo(output)
+        conlink = helperfunctions.videoinfo(output) # لا يزال يُحسب لكنه لن يُستخدم في الوصف
 
         if os.path.exists(output) and os.path.getsize(output) > 0:
-            caption=f'**Source File** : __{srclink}__\n\n**Converted File** : __{conlink}__'
+            # تم إزالة إنشاء متغير caption لأنه لم يعد مستخدماً هنا
+            # caption=f'**Source File** : __{srclink}__\n\n**Converted File** : __{conlink}__'
             app.send_chat_action(message.chat.id, enums.ChatAction.UPLOAD_DOCUMENT)
-            up(message,output,msg,capt=caption)
+            # --- تم تعديل الاستدعاء هنا ---
+            up(message,output,msg) # لم نعد نمرر الوصف 'caption'
+            # -----------------------------
         else:
             app.send_message(message.chat.id,"__Error while Conversion__", reply_to_message_id=message.id)
-            
+
         if os.path.exists(output):
             os.remove(output)   
 
