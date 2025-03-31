@@ -1111,10 +1111,45 @@ def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_an
     dext = message.document.file_name.split(".")[-1].upper()
 
     # VID / AUD
+        # التحقق إذا كان الملف فيديو أو صوتي (VIDAUD معرف في buttons.py)
     if message.document.file_name.upper().endswith(VIDAUD):
-        app.send_message(message.chat.id,
-                         f'__Detected Extension:__ **{dext}** 📹 / 🔊\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{VA_TEXT}__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
-                         reply_markup=VAboard, reply_to_message_id=message.id)
+        # --- بداية التعديل ---
+        # الهدف هو التحويل التلقائي إلى MOV
+
+        # 1. استخراج المعلومات اللازمة
+        inputt = message.document.file_name
+        # dext تم حسابه في بداية الدالة وهو بالأحرف الكبيرة
+        oldext = dext.lower() # دالة follow قد تتوقع الأحرف الصغيرة
+        newext = "mov"        # الامتداد الهدف المحدد تلقائيًا
+
+        # 2. التحقق من أن الامتداد القديم والجديد ليسا متماثلين (خطوة احترازية)
+        if oldext == newext:
+             app.send_message(message.chat.id, f"__The file is already in {newext.upper()} format.__", reply_to_message_id=message.id)
+             # لا حاجة للمعالجة، لذا نزيل الرسالة المحفوظة
+             removeSavedMsg(message)
+             # يمكن إضافة return هنا للخروج من الدالة إذا لم تكن هناك معالجة أخرى للمستندات
+             # return # Uncomment if needed
+
+        else:
+            # 3. إرسال رسالة تأكيد بدء التحويل التلقائي
+            # نستخدم reply_markup=ReplyKeyboardRemove() لإزالة أي لوحة مفاتيح سابقة قد تكون ظاهرة
+            msg = app.send_message(message.chat.id,
+                                   f'__Detected {dext} file. Automatically converting to {newext.upper()}...__',
+                                   reply_markup=ReplyKeyboardRemove(),
+                                   reply_to_message_id=message.id)
+
+            # 4. بدء عملية التحويل في خيط منفصل لتجنب حظر البوت
+            conv = threading.Thread(target=lambda: follow(message, inputt, newext, oldext, msg), daemon=True)
+            conv.start()
+
+            # 5. إزالة الرسالة من الحالة المحفوظة (لم يعد المستخدم بحاجة للرد عليها لاختيار الامتداد)
+            # مهم: يجب إزالتها هنا لأننا تخطينا خطوة انتظار رد المستخدم
+            removeSavedMsg(message)
+
+        # --- نهاية التعديل ---
+
+    # التحقق إذا كان الملف صورة (IMG معرف في buttons.py)
+    # ... باقي الكود elif يستمر كما هو ...
 
     # IMG
     elif message.document.file_name.upper().endswith(IMG):
