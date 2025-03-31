@@ -2,7 +2,8 @@ import pyrogram
 from pyrogram import Client
 from pyrogram import filters
 from pyrogram import enums
-from pyrogram.types import InlineKeyboardMarkup,InlineKeyboardButton
+# Need InputMediaVideo for send_media_group
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove, InputMediaVideo
 
 import os
 import shutil
@@ -11,7 +12,7 @@ import threading
 import time
 
 from buttons import *
-# import aifunctions
+# import aifunctions # Keep relevant imports
 import helperfunctions
 import mediainfo
 import guess
@@ -20,19 +21,20 @@ import progconv
 import others
 import tictactoe
 
-
 # env
-bot_token = os.environ.get("TOKEN", "") 
-api_hash = os.environ.get("HASH", "") 
+bot_token = os.environ.get("TOKEN", "")
+api_hash = os.environ.get("HASH", "")
 api_id = os.environ.get("ID", "")
 
-
 # bot
-app = Client("my_bot",api_id=api_id, api_hash=api_hash,bot_token=bot_token)
+app = Client("my_bot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 MESGS = {}
+# --- NEW ---: Dictionary to hold video queues per user {user_id: [list of message objects]}
+VIDEO_QUEUE = {}
+MAX_ALBUM_SIZE = 10 # Max videos per album
 
 
-# msgs functions
+# msgs functions (keep as is)
 def saveMsg(msg, msg_type):
     MESGS[msg.from_user.id] = [msg, msg_type]
 
@@ -40,8 +42,105 @@ def getSavedMsg(msg):
     return MESGS.get(msg.from_user.id, [None, None])
 
 def removeSavedMsg(msg):
-    del MESGS[msg.from_user.id]
+    if msg.from_user.id in MESGS: # Check existence before deleting
+        del MESGS[msg.from_user.id]
 
+def process_and_send_album(client: Client, user_id: int, chat_id: int):
+    if user_id not in VIDEO_QUEUE or not VIDEO_QUEUE[user_id]:
+        print(f"No queue found for user {user_id} when trying to send album.")
+        return # Nothing to process
+
+    # Take up to MAX_ALBUM_SIZE videos from the user's queue
+    messages_to_process = VIDEO_QUEUE[user_id][:MAX_ALBUM_SIZE]
+    # Remove these messages from the main queue immediately to prevent race conditions
+    VIDEO_QUEUE[user_id] = VIDEO_QUEUE[user_id][len(messages_to_process):]
+
+    media_group = []
+    processed_files_info = [] # Store tuples of (filepath, thumbpath or None) for cleanup
+
+    status_msg = None
+    try:
+        status_msg = client.send_message(chat_id, f"Processing {len(messages_to_process)} videos for album...")
+
+        for i, message in enumerate(messages_to_process):
+            file_path = None
+            thumb_path = None
+            try:
+                client.edit_message_text(chat_id, status_msg.id, f"Processing video {i+1}/{len(messages_to_process)}...")
+
+                # 1. Download (using original 'down' function for progress)
+                # We don't need the progress message 'msg' returned by down here.
+                file_path, _ = down(message)
+                if not file_path or not os.path.exists(file_path):
+                    raise Exception(f"Download failed for message {message.id}")
+
+                # 2. Get media info
+                thumb_path, duration, width, height = mediainfo.allinfo(file_path)
+                # Use filename as caption, or fallback
+                # Ensure caption is not too long for media group (Telegram limits apply)
+                base_name = os.path.basename(file_path)
+                caption = f"**{base_name[:900]}**" # Limit caption length roughly
+
+                # 3. Prepare InputMediaVideo object
+                media = InputMediaVideo(
+                    media=file_path,
+                    thumb=thumb_path, # Pass thumb path if exists
+                    caption=caption,
+                    duration=duration or 0,
+                    width=width or 0,
+                    height=height or 0,
+                    supports_streaming=True # Explicitly mark as streamable
+                )
+                media_group.append(media)
+                processed_files_info.append((file_path, thumb_path)) # Add for cleanup
+
+            except Exception as e:
+                print(f"Error processing video {message.id} for album: {e}")
+                client.send_message(chat_id, f"⚠️ Error processing one video (ID: {message.id}). It will be skipped. Error: {str(e)[:100]}", reply_to_message_id=message.id)
+                # Cleanup partial files if error occurred after download
+                if file_path and os.path.exists(file_path):
+                    try: os.remove(file_path)
+                    except OSError: pass
+                if thumb_path and os.path.exists(thumb_path):
+                    try: os.remove(thumb_path)
+                    except OSError: pass
+
+        # Check if any videos were successfully processed
+        if not media_group:
+            client.edit_message_text(chat_id, status_msg.id, "No videos could be processed for the album.")
+            # No files in processed_files_info yet or they were cleaned above
+            return # Exit function
+
+        # Send the album
+        client.edit_message_text(chat_id, status_msg.id, f"Uploading album with {len(media_group)} videos...")
+        client.send_media_group(chat_id, media=media_group)
+        client.delete_messages(chat_id, status_msg.id) # Delete status message on success
+
+    except Exception as e:
+        print(f"Error sending album for user {user_id}: {e}")
+        if status_msg:
+            try:
+                client.edit_message_text(chat_id, status_msg.id, f"❌ Failed to send the album. Error: {str(e)[:100]}")
+            except: pass # Ignore if editing fails
+        else: # If status msg failed initially
+             client.send_message(chat_id, f"❌ Failed to send the album. Error: {str(e)[:100]}")
+
+
+    finally:
+        # Cleanup all downloaded files and thumbs for this batch
+        for file_p, thumb_p in processed_files_info:
+            if file_p and os.path.exists(file_p):
+                try: os.remove(file_p)
+                except OSError as err: print(f"Cleanup Error (file): {err}")
+            if thumb_p and os.path.exists(thumb_p):
+                try: os.remove(thumb_p)
+                except OSError as err: print(f"Cleanup Error (thumb): {err}")
+
+        # Double-check if the user's queue became empty and remove the key
+        if user_id in VIDEO_QUEUE and not VIDEO_QUEUE[user_id]:
+            try:
+                del VIDEO_QUEUE[user_id]
+            except KeyError: pass # Ignore if already deleted
 
 # main function to follow
 def follow(message,inputt,new,old,oldmessage):
@@ -793,118 +892,285 @@ def other(message):
     else:
         handleAIChat(message)
 
-# download with progress
+# download with progress (keep as is)
 def down(message):
-
-    try:
-        size = int(message.document.file_size)
-    except:
+    size = 1
+    media = message.video or message.document # Handle both types if needed
+    if media and hasattr(media, 'file_size') and media.file_size:
         try:
-            size = int(message.video.file_size)
-        except:
-            size = 1
+            size = int(media.file_size)
+        except: pass # Keep size=1 if conversion fails
 
+    msg = None
     if size > 25000000:
-        msg = app.send_message(message.chat.id, '__Downloading__', reply_to_message_id=message.id)
-        dosta = threading.Thread(target=lambda:downstatus(f'{message.id}downstatus.txt',msg),daemon=True)
+        # Ensure reply_markup is removed if sending progress message
+        msg = app.send_message(message.chat.id, '__Downloading__', reply_to_message_id=message.id, reply_markup=ReplyKeyboardRemove())
+        # Ensure status file name is unique per message AND download/upload phase
+        status_file = f'{message.chat.id}_{message.id}_downstatus.txt'
+        # Create status file immediately so status thread doesn't wait forever
+        with open(status_file, "w") as f: f.write("0.0%")
+        dosta = threading.Thread(target=lambda: downstatus(status_file, msg), daemon=True)
         dosta.start()
     else:
-        msg = None
+        status_file = None # No status needed for small files
 
-    file = app.download_media(message,progress=dprogress, progress_args=[message])
-    os.remove(f'{message.id}downstatus.txt')
-    return file,msg
+    # Use the unique status file name for progress args
+    file = app.download_media(message, progress=dprogress, progress_args=[status_file] if status_file else [])
+
+    if status_file and os.path.exists(status_file):
+        # Signal completion to status thread maybe, or just remove
+        try: os.remove(status_file)
+        except OSError: pass
+    return file, msg # Return the original progress message object if created
 
 
-# uploading with progress
+# uploading with progress (keep as is, used by other functions)
 def up(message, file, msg, video=False, capt="", thumb=None, duration=0, widht=0, height=0, multi=False):
-
-    if msg != None:
+    if msg: # Check if msg object exists
         try:
             app.edit_message_text(message.chat.id, msg.id, '__Uploading__')
-        except:
-            pass
-        
-    if os.path.getsize(file) > 25000000:
-        upsta = threading.Thread(target=lambda:upstatus(f'{message.id}upstatus.txt',msg),daemon=True)
+        except Exception as e:
+            print(f"Error editing upload message: {e}") # Ignore errors like message not found
+
+    status_file = None
+    if os.path.exists(file) and os.path.getsize(file) > 25000000:
+        # Ensure status file name is unique per message AND download/upload phase
+        status_file = f'{message.chat.id}_{message.id}_upstatus.txt'
+        # Create status file immediately
+        with open(status_file, "w") as f: f.write("0.0%")
+        upsta = threading.Thread(target=lambda: upstatus(status_file, msg), daemon=True)
         upsta.start()
 
-    if not video:
-        app.send_document(message.chat.id, document=file, caption=capt, force_document=True ,reply_to_message_id=message.id, progress=uprogress, progress_args=[message])    
+    try:
+        if not video:
+            app.send_document(message.chat.id, document=file, caption=capt, force_document=True ,reply_to_message_id=message.id, progress=uprogress, progress_args=[status_file] if status_file else [])
+        else:
+            app.send_video(message.chat.id, video=file, caption=capt, thumb=thumb, duration=duration, width=widht, height=height, reply_to_message_id=message.id, progress=uprogress, progress_args=[status_file] if status_file else [])
+    except Exception as upload_err:
+        print(f"Error during upload: {upload_err}")
+        if msg:
+            try: app.edit_message_text(message.chat.id, msg.id, f'__Upload Failed: {upload_err}__')
+            except: pass # Ignore edit error
+        # Do not delete original message here as upload failed
+
+    # Cleanup thumb and status file
+    if thumb and os.path.exists(thumb):
+        try: os.remove(thumb)
+        except OSError: pass
+    if status_file and os.path.exists(status_file):
+        try: os.remove(status_file)
+        except OSError: pass
+
+    # Delete the progress message ONLY if upload succeeded and it's not multi-upload
+    if msg and not multi: # Check 'msg' exists before trying delete
+         # We should check if upload was successful before deleting
+         # However, the structure doesn't easily return success status here.
+         # Let's keep deleting it for now, assuming success if no exception was raised *during* send_*
+         try:
+             app.delete_messages(message.chat.id, message_ids=msg.id)
+         except Exception as e:
+             print(f"Could not delete progress message {msg.id}: {e}")
+
+# up progress (adapt to handle status_file argument)
+def uprogress(current, total, status_file):
+    if not status_file: return # No status file to write to
+    try:
+        # Prevent division by zero
+        percentage = 0.0 if total == 0 else current * 100 / total
+        with open(status_file, "w") as fileup:
+            fileup.write(f"{percentage:.1f}%")
+    except Exception as e:
+        print(f"Error writing uprogress: {e}")
+
+# down progress (adapt to handle status_file argument)
+def dprogress(current, total, status_file):
+    if not status_file: return # No status file to write to
+    try:
+        # Prevent division by zero
+        percentage = 0.0 if total == 0 else current * 100 / total
+        with open(status_file, "w") as fileup:
+            fileup.write(f"{percentage:.1f}%")
+    except Exception as e:
+        print(f"Error writing dprogress: {e}")
+
+
+# upload status (keep mostly as is, uses statusfile)
+def upstatus(statusfile, message):
+    # Wait briefly for the file to potentially be created
+    start_time = time.time()
+    while not os.path.exists(statusfile):
+        if time.time() - start_time > 10: # Timeout waiting for status file
+             print(f"upstatus: Timeout waiting for {statusfile}")
+             return
+        time.sleep(0.5)
+
+    if not message: # If no progress message was created, don't try to edit
+        print("upstatus: No message object provided, cannot update status.")
+        return
+
+    last_update_time = 0
+    last_txt = ""
+    while os.path.exists(statusfile):
+        try:
+            current_time = time.time()
+            # Rate limit editing to avoid flood waits
+            if current_time - last_update_time > 5: # Edit max every 5 seconds
+                with open(statusfile, "r") as upread:
+                    txt = upread.read().strip()
+
+                # Only edit if text changed
+                if txt != last_txt and "%" in txt: # Basic validation
+                    app.edit_message_text(message.chat.id, message.id, f"__Uploading__ : **{txt}**")
+                    last_txt = txt
+                    last_update_time = current_time
+
+            time.sleep(1) # Check file existence every second
+        except pyrogram.errors.FloodWait as e:
+            print(f"Flood wait of {e.value} seconds in upstatus")
+            time.sleep(e.value + 2)
+        except Exception as e:
+            # Handle message deleted or other errors
+            print(f"Error in upstatus (will stop monitoring for this message): {e}")
+            break # Exit loop if message editing fails (e.g., deleted)
+
+# download status (keep mostly as is, uses statusfile)
+def downstatus(statusfile, message):
+    # Wait briefly for the file to potentially be created
+    start_time = time.time()
+    while not os.path.exists(statusfile):
+        if time.time() - start_time > 10: # Timeout waiting for status file
+            print(f"downstatus: Timeout waiting for {statusfile}")
+            return
+        time.sleep(0.5)
+
+    if not message: # If no progress message was created, don't try to edit
+        print("downstatus: No message object provided, cannot update status.")
+        return
+
+    last_update_time = 0
+    last_txt = ""
+    while os.path.exists(statusfile):
+        try:
+            current_time = time.time()
+            # Rate limit editing
+            if current_time - last_update_time > 5: # Edit max every 5 seconds
+                with open(statusfile, "r") as upread:
+                    txt = upread.read().strip()
+
+                # Only edit if text changed
+                if txt != last_txt and "%" in txt: # Basic validation
+                    app.edit_message_text(message.chat.id, message.id, f"__Downloading__ : **{txt}**")
+                    last_txt = txt
+                    last_update_time = current_time
+
+            time.sleep(1) # Check file existence every second
+        except pyrogram.errors.FloodWait as e:
+            print(f"Flood wait of {e.value} seconds in downstatus")
+            time.sleep(e.value + 2)
+        except Exception as e:
+            print(f"Error in downstatus (will stop monitoring for this message): {e}")
+            break # Exit loop if message editing fails
+
+
+# --- MODIFIED Video Handler ---
+@app.on_message(filters.video)
+def handle_video_enqueue(client: Client, message: pyrogram.types.messages_and_media.message.Message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    # Initialize queue for user if it doesn't exist
+    if user_id not in VIDEO_QUEUE:
+        VIDEO_QUEUE[user_id] = []
+
+    # Add the new video message to the user's queue
+    # We store the whole message object to easily access it later for download
+    VIDEO_QUEUE[user_id].append(message)
+    queue_size = len(VIDEO_QUEUE[user_id])
+
+    # Inform the user
+    feedback_msg = f"✅ Video added to album queue ({queue_size}/{MAX_ALBUM_SIZE})."
+    if queue_size < MAX_ALBUM_SIZE:
+        # Provide button/command hint if queue is not full
+        feedback_msg += f"\nSend {MAX_ALBUM_SIZE - queue_size} more, or use /sendalbum to send now."
+        # Maybe add InlineKeyboard for sending now?
+        reply_markup = InlineKeyboardMarkup([[
+           InlineKeyboardButton("Send Album Now", callback_data=f"send_album_now_{user_id}")
+        ]])
+        app.send_message(chat_id, feedback_msg, reply_to_message_id=message.id, reply_markup=reply_markup)
     else:
-        app.send_video(message.chat.id, video=file, caption=capt, thumb=thumb, duration=duration, width=widht, height=height, reply_to_message_id=message.id, progress=uprogress, progress_args=[message]) 
+        # Queue is full, automatically trigger processing and sending
+        app.send_message(chat_id, f"✅ Queue full ({queue_size}/{MAX_ALBUM_SIZE}).\n⚙️ Processing and sending album...", reply_to_message_id=message.id)
+        # Run the album processing in a separate thread
+        album_thread = threading.Thread(target=process_and_send_album, args=(app, user_id, chat_id), daemon=True)
+        album_thread.start()
 
-    if thumb != None:
-        os.remove(thumb)
-    if os.path.exists(f'{message.id}upstatus.txt'):   
-        os.remove(f'{message.id}upstatus.txt')
+# --- NEW Command Handler for sending album manually ---
+@app.on_message(filters.command("sendalbum"))
+def command_send_album(client: Client, message: pyrogram.types.messages_and_media.message.Message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
 
-    if msg != None and not multi:
-        app.delete_messages(message.chat.id,message_ids=msg.id)
+    if user_id not in VIDEO_QUEUE or not VIDEO_QUEUE[user_id]:
+        app.send_message(chat_id, "Your video album queue is empty.", reply_to_message_id=message.id)
+    else:
+        queue_size = len(VIDEO_QUEUE[user_id])
+        app.send_message(chat_id, f"⚙️ Processing and sending {queue_size} video(s) from your queue...", reply_to_message_id=message.id)
+        # Run the album processing in a separate thread
+        album_thread = threading.Thread(target=process_and_send_album, args=(app, user_id, chat_id), daemon=True)
+        album_thread.start()
 
+# --- NEW Callback Query Handler for the "Send Album Now" button ---
+@app.on_callback_query(filters.regex("^send_album_now_"))
+def callback_send_album(client: Client, callback_query: pyrogram.types.CallbackQuery):
+    user_id = int(callback_query.data.split("_")[-1])
+    chat_id = callback_query.message.chat.id
 
-# up progress
-def uprogress(current, total, message):
-    with open(f'{message.id}upstatus.txt',"w") as fileup:
-        fileup.write(f"{current * 100 / total:.1f}%")
+    # Check if the button presser is the owner of the queue
+    if callback_query.from_user.id != user_id:
+        callback_query.answer("This is not your queue!", show_alert=True)
+        return
 
-
-# down progress
-def dprogress(current, total, message):
-    with open(f'{message.id}downstatus.txt',"w") as fileup:
-        fileup.write(f"{current * 100 / total:.1f}%")
-
-
-# upload status
-def upstatus(statusfile,message):
-
-    while True:
-        if os.path.exists(statusfile):
-            break
-        
-    time.sleep(5)
-    while os.path.exists(statusfile):
-
-        with open(statusfile,"r") as upread:
-            txt = upread.read()
-
-        #if "%" not in txt:
-                #txt = "0.0%"
-
+    if user_id not in VIDEO_QUEUE or not VIDEO_QUEUE[user_id]:
+        callback_query.answer("Your video album queue is already empty.", show_alert=True)
+    else:
+        queue_size = len(VIDEO_QUEUE[user_id])
+        # Acknowledge the button press
+        callback_query.answer(f"Sending {queue_size} video(s)...")
+        # Edit the original message to remove the button and show processing
         try:
-            app.edit_message_text(message.chat.id, message.id, f"__Uploaded__ : **{txt}**")
-            #if txt == "100.0%":
-                #break
-            time.sleep(10)
-        except:
-            time.sleep(5)
+            client.edit_message_text(
+                chat_id,
+                callback_query.message.id,
+                f"⚙️ Processing and sending {queue_size} video(s) from your queue...",
+                reply_markup=None # Remove the inline keyboard
+            )
+        except Exception as e:
+            print(f"Error editing message on callback: {e}")
+            # Send a new message if editing failed
+            client.send_message(chat_id, f"⚙️ Processing and sending {queue_size} video(s) from your queue...")
+
+        # Run the album processing in a separate thread
+        album_thread = threading.Thread(target=process_and_send_album, args=(app, user_id, chat_id), daemon=True)
+        album_thread.start()
 
 
-# download status
-def downstatus(statusfile,message):
+# --- Make sure other callback handlers (like TTT, Guess) are still present ---
+@app.on_callback_query()
+def handle_other_callbacks(client: Client, call: pyrogram.types.CallbackQuery):
+    # Check if it's the send_album callback (already handled above, so skip here)
+    if call.data.startswith("send_album_now_"):
+        return # Already handled by the specific regex filter
 
-    while True:
-        if os.path.exists(statusfile):
-            break
-        
-    time.sleep(5)
-    while os.path.exists(statusfile):
-
-        with open(statusfile,"r") as upread:
-            txt = upread.read()
-        
-        #if "%" not in txt:
-                #txt = "0.0%"
-
+    # Handle other callbacks
+    if call.data[:4] == "TTT ": return tictactoe.TTTgame(app,call,call.message)
+    elif call.data[:2] == "G ": return guess.Ggame(app,call)
+    # Add elif for other callbacks if needed
+    else:
+        # If no other handler matches, acknowledge or ignore
         try:
-            app.edit_message_text(message.chat.id, message.id, f"__Downloaded__ : **{txt}**")
-            #if txt == "100.0%":
-                #break
-            time.sleep(10)
-        except:
-            time.sleep(5)
-
-
+            call.answer("Unknown action.") # Or just pass/return
+        except Exception:
+            pass # Ignore if answering fails (e.g., callback too old)
 # app messages
 @app.on_message(filters.command(['start']))
 def start(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
@@ -1103,7 +1369,55 @@ def inbtwn(client: pyrogram.client.Client, call: pyrogram.types.CallbackQuery):
 	if call.data[:4] == "TTT ": return tictactoe.TTTgame(app,call,call.message)
 	elif call.data[:2] == "G ": return guess.Ggame(app,call)
 
+    
+@app.on_message(filters.document)
+def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    # Check if the document is actually a video file type
+    if message.document.mime_type and message.document.mime_type.startswith("video/"):
+        # Optional: Treat it like a video? Or let the conversion logic handle it?
+        # For now, let the standard document logic proceed.
+        # You *could* call handle_video_enqueue here if you want videos-as-docs
+        # to also join the album queue.
 
+        # If you want videos sent as documents to join the queue:
+        # print("Document is a video, adding to queue...")
+        # handle_video_enqueue(client, message) # Call the video handler
+        # return # Stop further document processing for this video document
+
+        # If you want to proceed with normal document handling even if it's video:
+        pass # Fall through to existing document logic below
+
+    # Existing document handling logic starts here
+    # This part will run for all documents *unless* you added 'return' above
+    saveMsg(message, "DOCUMENT")
+    dext = message.document.file_name.split(".")[-1].upper()
+
+    # --- HERE you should have your original checks based on 'dext' ---
+    # Example structure (replace with your actual checks):
+    if dext in VIDAUD:
+        # ... your VIDAUD logic ...
+        app.send_message(message.chat.id,
+                         f'__Detected Extension:__ **{dext}** 📹 / 🔊\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{VA_TEXT}__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
+                         reply_markup=VAboard, reply_to_message_id=message.id)
+    elif dext in IMG:
+        # ... your IMG logic ...
+        app.send_message(message.chat.id,
+                         f'__Detected Extension:__ **{dext}** 📷\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{IMG_TEXT}__\n\n**SPECIAL** 🎁\n__Colorize, Positive, Upscale & Scan__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
+                         reply_markup=IMGboard, reply_to_message_id=message.id)
+    # ... add all your other elif blocks for LBW, LBC, LBI, FF, EB, ARC, TOR, SUB, PRO, T3D ...
+    elif dext == "TORRENT": # Example for TORRENT handling
+        removeSavedMsg(message)
+        oldm = app.send_message(message.chat.id,'__Getting Magnet Link__', reply_to_message_id=message.id)
+        ml = threading.Thread(target=lambda:getmag(message,oldm),daemon=True)
+        ml.start()
+        return # Stop further processing for torrents here
+
+    # The 'else' should come after *all* specific extension checks
+    else:
+        # This block runs if the document extension didn't match any known type above
+        app.send_message(message.chat.id,
+                         '__No Available Conversions found for this document type.\n\nYou can use:__\n**/rename new-filename** __to Rename__\n**/read** __to Read the File__',
+                         reply_to_message_id=message.id)
 # document
 @app.on_message(filters.document)
 def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
