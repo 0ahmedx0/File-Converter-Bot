@@ -811,7 +811,7 @@ def other(message):
     else:
         handleAIChat(message)
 
--# download with progress
+# download with progress
 def down(message):
     file = None
     msg = None
