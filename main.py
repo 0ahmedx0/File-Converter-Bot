@@ -40,7 +40,10 @@ def getSavedMsg(msg):
     return MESGS.get(msg.from_user.id, [None, None])
 
 def removeSavedMsg(msg):
-    del MESGS[msg.from_user.id]
+    # استخدم .pop() مع قيمة افتراضية لتجنب KeyError
+    # إذا كان المفتاح موجودًا، فسيتم حذفه وإرجاع قيمته (التي لا نستخدمها هنا).
+    # إذا لم يكن المفتاح موجودًا، فسيتم إرجاع None ولن يحدث خطأ.
+    MESGS.pop(msg.from_user.id, None)
 
 
 # main function to follow
@@ -1110,49 +1113,54 @@ def inbtwn(client: pyrogram.client.Client, call: pyrogram.types.CallbackQuery):
 # document
 @app.on_message(filters.document)
 def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    # حفظ الرسالة ونوعها ("DOCUMENT") أولاً
     saveMsg(message, "DOCUMENT")
+    # استخراج الامتداد وتحويله للأحرف الكبيرة
     dext = message.document.file_name.split(".")[-1].upper()
 
-    # VID / AUD
-        # التحقق إذا كان الملف فيديو أو صوتي (VIDAUD معرف في buttons.py)
+    # التحقق إذا كان الملف فيديو أو صوتي (VIDAUD معرف في buttons.py)
     if message.document.file_name.upper().endswith(VIDAUD):
-        # --- بداية التعديل ---
-        # الهدف هو التحويل التلقائي إلى MOV
 
-        # 1. استخراج المعلومات اللازمة
-        inputt = message.document.file_name
-        # dext تم حسابه في بداية الدالة وهو بالأحرف الكبيرة
-        oldext = dext.lower() # دالة follow قد تتوقع الأحرف الصغيرة
-        newext = "mov"        # الامتداد الهدف المحدد تلقائيًا
+        # أولاً: تحقق إذا كان الامتداد هو MOV بالتحديد
+        if dext == "MOV":
+            print("Detected MOV document, triggering sendvideo.")
+            # إرسال رسالة مؤقتة للمستخدم
+            oldm = app.send_message(message.chat.id,
+                                    '__Processing MOV file to send as video stream...__',
+                                    reply_markup=ReplyKeyboardRemove(),
+                                    reply_to_message_id=message.id)
+            # تشغيل sendvideo في خيط منفصل
+            sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
+            sv.start()
+            # إزالة الحالة المحفوظة لأننا عالجناها مباشرة ولا ننتظر رداً
+            removeSavedMsg(message)
+            # الخروج من الدالة documnet
+            return
 
-        # 2. التحقق من أن الامتداد القديم والجديد ليسا متماثلين (خطوة احترازية)
-        if oldext == newext:
-             app.send_message(message.chat.id, f"__The file is already in {newext.upper()} format.__", reply_to_message_id=message.id)
-             # لا حاجة للمعالجة، لذا نزيل الرسالة المحفوظة
-             removeSavedMsg(message)
-             # يمكن إضافة return هنا للخروج من الدالة إذا لم تكن هناك معالجة أخرى للمستندات
-             # return # Uncomment if needed
-
+        # ثانياً: إذا لم يكن MOV ولكنه لا يزال فيديو/صوت (VIDAUD)، قم بالتحويل التلقائي إلى MOV
         else:
-            # 3. إرسال رسالة تأكيد بدء التحويل التلقائي
-            # نستخدم reply_markup=ReplyKeyboardRemove() لإزالة أي لوحة مفاتيح سابقة قد تكون ظاهرة
+            print(f"Detected {dext} document (VIDAUD), auto-converting to MOV.")
+            inputt = message.document.file_name
+            oldext = dext.lower()
+            newext = "mov"
+
+            # إرسال رسالة تأكيد بدء التحويل التلقائي
             msg = app.send_message(message.chat.id,
                                    f'__Detected {dext} file. Automatically converting to {newext.upper()}...__',
                                    reply_markup=ReplyKeyboardRemove(),
                                    reply_to_message_id=message.id)
 
-            # 4. بدء عملية التحويل في خيط منفصل لتجنب حظر البوت
+            # بدء عملية التحويل في خيط منفصل
             conv = threading.Thread(target=lambda: follow(message, inputt, newext, oldext, msg), daemon=True)
             conv.start()
 
-            # 5. إزالة الرسالة من الحالة المحفوظة (لم يعد المستخدم بحاجة للرد عليها لاختيار الامتداد)
-            # مهم: يجب إزالتها هنا لأننا تخطينا خطوة انتظار رد المستخدم
+            # إزالة الحالة المحفوظة لأننا عالجناها مباشرة ولا ننتظر رداً
             removeSavedMsg(message)
+            # الخروج من الدالة documnet
+            return
 
-        # --- نهاية التعديل ---
-
-    # التحقق إذا كان الملف صورة (IMG معرف في buttons.py)
-    # ... باقي الكود elif يستمر كما هو ...
+    # -- المعالجة لأنواع الملفات الأخرى --
+    # ملاحظة: لا يتم استدعاء removeSavedMsg هنا لأننا ننتظر رد المستخدم
 
     # IMG
     elif message.document.file_name.upper().endswith(IMG):
@@ -1189,21 +1197,23 @@ def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_an
         app.send_message(message.chat.id,
                          f'__Detected Extension:__ **{dext}** 📚 \n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{EB_TEXT}__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
                          reply_markup=EBboard, reply_to_message_id=message.id)
-    
+
     # ARC
     elif message.document.file_name.upper().endswith(ARC):
         app.send_message(message.chat.id,
                          f'__Detected Extension:__ **{dext}** 🗄\n__Do you want to Extract ?__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
                          reply_markup=ARCboard, reply_to_message_id=message.id)
 
-    # TOR
+    # TOR (حالة خاصة، لا تنتظر رداً)
     elif message.document.file_name.upper().endswith("TORRENT"):
-        removeSavedMsg(message)
+        # بدء الإجراء مباشرة
         oldm = app.send_message(message.chat.id,'__Getting Magnet Link__', reply_to_message_id=message.id)
         ml = threading.Thread(target=lambda:getmag(message,oldm),daemon=True)
         ml.start()
+        # إزالة الحالة فوراً والخروج
+        removeSavedMsg(message)
         return
-    
+
     # SUB
     elif message.document.file_name.upper().endswith(SUB):
         app.send_message(message.chat.id,
@@ -1215,17 +1225,19 @@ def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_an
         app.send_message(message.chat.id,
                          f'__Detected Extension:__ **{dext}** 👨‍💻 \n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{PRO_TEXT}__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
                          reply_markup=PROboard, reply_to_message_id=message.id)
-    
+
     # T3D
     elif message.document.file_name.upper().endswith(T3D):
         app.send_message(message.chat.id,
                          f'__Detected Extension:__ **{dext}** 💠 \n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{T3D_TEXT}__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
                          reply_markup=T3Dboard, reply_to_message_id=message.id)
 
-    # else
+    # else (لم يتطابق مع أي نوع مدعوم ينتظر ردًا)
     else:
+        # إرسال رسالة عدم الدعم
         app.send_message(message.chat.id,'__No Available Conversions found.\n\nYou can use:__\n**/rename new-filename** __to Rename__\n**/read** __to Read the File__')
-    
+        # إزالة الحالة المحفوظة هنا لأننا لا نتوقع أي إجراء آخر لهذه الرسالة
+        removeSavedMsg(message)    
 
 
 # animation
