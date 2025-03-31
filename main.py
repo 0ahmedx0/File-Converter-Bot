@@ -3,13 +3,13 @@ from pyrogram import Client
 from pyrogram import filters
 from pyrogram import enums
 from pyrogram.types import InlineKeyboardMarkup,InlineKeyboardButton
-from pyrogram.types import InputMediaVideo, ReplyKeyboardRemove
+
 import os
 import shutil
 import subprocess
 import threading
 import time
-import asyncio
+
 from buttons import *
 # import aifunctions
 import helperfunctions
@@ -30,8 +30,7 @@ api_id = os.environ.get("ID", "")
 # bot
 app = Client("my_bot",api_id=api_id, api_hash=api_hash,bot_token=bot_token)
 MESGS = {}
-ALBUM_QUEUE = {}
-MAX_ALBUM_SIZE = 10 
+
 
 # msgs functions
 def saveMsg(msg, msg_type):
@@ -362,23 +361,6 @@ def colorizeimage(message,oldmessage):
 
 
 # dalle
-@app.on_message(filters.command(['start']))
-def start(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    # Cancel any pending album for this user
-    if message.from_user.id in ALBUM_QUEUE:
-        del ALBUM_QUEUE[message.from_user.id]
-    app.send_message(message.chat.id, f"Welcome {message.from_user.mention}\nSend a **File** first and then you can choose **Extension**\n\n"
-                     "__Album Feature:__\n"
-                     "Use /startalbum to begin collecting videos.\n"
-                     "Send up to 10 videos.\n"
-                     "Use /sendalbum to send the collected videos as a streamable album.\n"
-                     "Use /cancelalbum to clear the queue.\n\n"
-                     "__want to know more about me ?__\n"
-                     "use /help - to get List of Commands\n"
-                     "use /detail - to get List of Supported Extensions\n\n"
-                     "I also have Special AI features including ChatBot, you don't believe me? ask me anything",
-                     reply_to_message_id=message.id)
-	
 def genrateimages(message,prompt,msg):
     
     # dalle mini
@@ -813,455 +795,115 @@ def other(message):
 
 # download with progress
 def down(message):
-    file = None
-    msg = None
+
     try:
-        # Determine file size (handle different message types)
-        file_size = 0
-        if message.document:
-            file_size = message.document.file_size
-        elif message.video:
-            file_size = message.video.file_size
-        elif message.audio:
-            file_size = message.audio.file_size
-        # Add other types if needed (photo, voice, etc.) - they are usually small
+        size = int(message.document.file_size)
+    except:
+        try:
+            size = int(message.video.file_size)
+        except:
+            size = 1
 
-        # Show progress only for files larger than 25MB
-        if file_size and file_size > 25 * 1024 * 1024: # 25 MB
-             # Send initial status message
-             msg = app.send_message(message.chat.id, '__Downloading 0.0%__', reply_to_message_id=message.id)
-             status_file = f'{message.id}_{message.from_user.id}_downstatus.txt'
-             # Start status updater thread
-             dosta = threading.Thread(target=lambda: downstatus(status_file, msg), daemon=True)
-             dosta.start()
-        else:
-            status_file = None # No status file for small downloads
+    if size > 25000000:
+        msg = app.send_message(message.chat.id, '__Downloading__', reply_to_message_id=message.id)
+        dosta = threading.Thread(target=lambda:downstatus(f'{message.id}downstatus.txt',msg),daemon=True)
+        dosta.start()
+    else:
+        msg = None
 
-        # Start download
-        file = app.download_media(message, progress=dprogress, progress_args=[message, status_file]) # Pass status_file path
-
-        # Clean up status file if it was created
-        if status_file and os.path.exists(status_file):
-            try:
-                os.remove(status_file)
-            except OSError as e:
-                print(f"Error removing download status file {status_file}: {e}")
-        # Return the downloaded file path and the status message object (or None)
-        return file, msg
-
-    except Exception as e:
-        print(f"Error during download: {e}")
-        # Clean up status file in case of error
-        if status_file and os.path.exists(status_file):
-             try:
-                 os.remove(status_file)
-             except OSError as e_rem:
-                 print(f"Error removing download status file {status_file} after error: {e_rem}")
-        # Clean up status message if download fails
-        if msg:
-            try:
-                app.delete_messages(message.chat.id, msg.id)
-            except Exception as e_del:
-                 print(f"Error deleting download status message after error: {e_del}")
-        return None, None # Indicate failure
+    file = app.download_media(message,progress=dprogress, progress_args=[message])
+    os.remove(f'{message.id}downstatus.txt')
+    return file,msg
 
 
 # uploading with progress
-def up(message, file, status_msg_obj, video=False, capt="", thumb=None, duration=0, widht=0, height=0, multi=False):
-    try:
-        if not file or not os.path.exists(file):
-            print(f"Upload error: File '{file}' does not exist.")
-            if status_msg_obj: # Try to update status message with error
-                 try: app.edit_message_text(message.chat.id, status_msg_obj.id, "__Upload Error: File not found__")
-                 except: pass # Ignore if editing fails
-            return # Stop upload
+def up(message, file, msg, video=False, capt="", thumb=None, duration=0, widht=0, height=0, multi=False):
 
-        file_size = os.path.getsize(file)
+    if msg != None:
+        try:
+            app.edit_message_text(message.chat.id, msg.id, '__Uploading__')
+        except:
+            pass
+        
+    if os.path.getsize(file) > 25000000:
+        upsta = threading.Thread(target=lambda:upstatus(f'{message.id}upstatus.txt',msg),daemon=True)
+        upsta.start()
 
-        # Edit status message before upload starts (if it exists)
-        if status_msg_obj:
-            try:
-                app.edit_message_text(message.chat.id, status_msg_obj.id, '__Uploading 0.0%__')
-            except Exception as e:
-                 print(f"Couldn't edit initial upload status message: {e}")
-                 # If editing failed, maybe the original message was deleted, nullify it
-                 status_msg_obj = None
+    if not video:
+        app.send_document(message.chat.id, document=file, caption=capt, force_document=True ,reply_to_message_id=message.id, progress=uprogress, progress_args=[message])    
+    else:
+        app.send_video(message.chat.id, video=file, caption=capt, thumb=thumb, duration=duration, width=widht, height=height, reply_to_message_id=message.id, progress=uprogress, progress_args=[message]) 
 
+    if thumb != None:
+        os.remove(thumb)
+    if os.path.exists(f'{message.id}upstatus.txt'):   
+        os.remove(f'{message.id}upstatus.txt')
 
-        # Show progress only for files larger than 25MB
-        if file_size > 25 * 1024 * 1024: # 25 MB
-            status_file = f'{message.id}_{message.from_user.id}_upstatus.txt'
-            # Start status updater thread only if the status_msg_obj is valid
-            if status_msg_obj:
-                 upsta = threading.Thread(target=lambda: upstatus(status_file, status_msg_obj), daemon=True)
-                 upsta.start()
-            else: # If no status message, don't start updater, but still need the file for progress callback
-                 # We won't have live % updates without the message object though
-                 print("No status message object for upload progress updates.")
-                 pass # Proceed without live updates
-        else:
-            status_file = None # No status file for small uploads
-
-        # Perform the upload
-        if not video:
-            app.send_document(
-                message.chat.id,
-                document=file,
-                caption=capt,
-                force_document=True,
-                reply_to_message_id=message.id,
-                progress=uprogress,
-                progress_args=[message, status_file] # Pass status_file path
-            )
-        else:
-            app.send_video(
-                message.chat.id,
-                video=file,
-                caption=capt,
-                thumb=thumb,
-                duration=duration,
-                width=widht,
-                height=height,
-                reply_to_message_id=message.id,
-                progress=uprogress,
-                progress_args=[message, status_file] # Pass status_file path
-            )
-
-        # --- Cleanup ---
-        if thumb and os.path.exists(thumb):
-            try: os.remove(thumb)
-            except OSError as e: print(f"Error removing thumb {thumb}: {e}")
-
-        if status_file and os.path.exists(status_file):
-            try: os.remove(status_file)
-            except OSError as e: print(f"Error removing upload status file {status_file}: {e}")
-
-        # Delete the status message ONLY if the upload was successful and it's not part of a multi-upload
-        if status_msg_obj and not multi:
-            try:
-                app.delete_messages(message.chat.id, message_ids=status_msg_obj.id)
-            except Exception as e:
-                 print(f"Error deleting status message after successful upload: {e}")
-
-    except Exception as e:
-        print(f"Error during upload: {e}")
-        # Attempt to update status message with error if possible
-        if status_msg_obj:
-             try: app.edit_message_text(message.chat.id, status_msg_obj.id, f"__Upload Failed: {e}__")
-             except: pass # Ignore if editing fails
-        # Clean up status file in case of error
-        if status_file and os.path.exists(status_file):
-             try: os.remove(status_file)
-             except OSError as e_rem: print(f"Error removing upload status file {status_file} after error: {e_rem}")
+    if msg != None and not multi:
+        app.delete_messages(message.chat.id,message_ids=msg.id)
 
 
 # up progress
-def uprogress(current, total, message, status_file):
-    if status_file: # Only write if status file path is provided
-        try:
-            with open(status_file, "w") as fileup:
-                fileup.write(f"{current * 100 / total:.1f}%")
-        except Exception as e:
-            # Avoid crashing the upload if status writing fails
-            print(f"Error writing upload progress to {status_file}: {e}")
+def uprogress(current, total, message):
+    with open(f'{message.id}upstatus.txt',"w") as fileup:
+        fileup.write(f"{current * 100 / total:.1f}%")
 
 
 # down progress
-def dprogress(current, total, message, status_file):
-     if status_file: # Only write if status file path is provided
-        try:
-            with open(status_file, "w") as fileup:
-                fileup.write(f"{current * 100 / total:.1f}%")
-        except Exception as e:
-            # Avoid crashing the download if status writing fails
-            print(f"Error writing download progress to {status_file}: {e}")
+def dprogress(current, total, message):
+    with open(f'{message.id}downstatus.txt',"w") as fileup:
+        fileup.write(f"{current * 100 / total:.1f}%")
 
 
 # upload status
-def upstatus(statusfile, message_obj): # Pass the actual message object
-    if not message_obj: return # Don't run if message object is invalid
+def upstatus(statusfile,message):
 
-    # Wait briefly for the status file to potentially be created
-    for _ in range(5): # Wait up to 5 seconds
+    while True:
         if os.path.exists(statusfile):
             break
-        time.sleep(1)
-    else:
-        # If file doesn't appear, maybe the upload was too fast or failed early
-        print(f"Upload status file {statusfile} not found.")
-        return
-
-    last_update_time = 0
-    interval = 8 # Update every 8 seconds
-
+        
+    time.sleep(5)
     while os.path.exists(statusfile):
-        current_time = time.time()
-        if current_time - last_update_time >= interval:
-            try:
-                with open(statusfile, "r") as upread:
-                    txt = upread.read().strip()
-                if txt: # Ensure text is not empty
-                     # Check if message still exists before editing
-                     # This check might not be perfectly reliable but is better than nothing
-                     if app.get_messages(message_obj.chat.id, message_obj.id):
-                          app.edit_message_text(message_obj.chat.id, message_obj.id, f"__Uploading__ : **{txt}**")
-                          last_update_time = current_time
-                     else:
-                          # Message was deleted, stop trying to update
-                          print(f"Upload status message {message_obj.id} deleted, stopping status updates.")
-                          break
-            except pyrogram.errors.MessageIdInvalid:
-                 print(f"Upload status message {message_obj.id} is invalid or deleted, stopping status updates.")
-                 break # Stop the loop if message is gone
-            except Exception as e:
-                print(f"Error reading/editing upload status ({statusfile}): {e}")
-                # Don't break the loop for transient errors, just wait for next interval
-        time.sleep(1) # Check file existence every second
+
+        with open(statusfile,"r") as upread:
+            txt = upread.read()
+
+        #if "%" not in txt:
+                #txt = "0.0%"
+
+        try:
+            app.edit_message_text(message.chat.id, message.id, f"__Uploaded__ : **{txt}**")
+            #if txt == "100.0%":
+                #break
+            time.sleep(10)
+        except:
+            time.sleep(5)
 
 
 # download status
-def downstatus(statusfile, message_obj): # Pass the actual message object
-    if not message_obj: return # Don't run if message object is invalid
+def downstatus(statusfile,message):
 
-    # Wait briefly for the status file to potentially be created
-    for _ in range(5): # Wait up to 5 seconds
+    while True:
         if os.path.exists(statusfile):
             break
-        time.sleep(1)
-    else:
-        # If file doesn't appear, maybe the download was too fast or failed early
-        print(f"Download status file {statusfile} not found.")
-        return
-
-    last_update_time = 0
-    interval = 8 # Update every 8 seconds
-
+        
+    time.sleep(5)
     while os.path.exists(statusfile):
-        current_time = time.time()
-        if current_time - last_update_time >= interval:
-            try:
-                with open(statusfile, "r") as upread:
-                    txt = upread.read().strip()
-                if txt: # Ensure text is not empty
-                     # Check if message still exists before editing
-                     if app.get_messages(message_obj.chat.id, message_obj.id):
-                          app.edit_message_text(message_obj.chat.id, message_obj.id, f"__Downloading__ : **{txt}**")
-                          last_update_time = current_time
-                     else:
-                          # Message was deleted, stop trying to update
-                          print(f"Download status message {message_obj.id} deleted, stopping status updates.")
-                          break
-            except pyrogram.errors.MessageIdInvalid:
-                 print(f"Download status message {message_obj.id} is invalid or deleted, stopping status updates.")
-                 break # Stop the loop if message is gone
-            except Exception as e:
-                print(f"Error reading/editing download status ({statusfile}): {e}")
-                # Don't break the loop for transient errors, just wait for next interval
-        time.sleep(1) # Check file existence every second		
-# --- Album Commands --- جوجل 
 
-@app.on_message(filters.command(['startalbum']))
-def start_album(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    user_id = message.from_user.id
-    ALBUM_QUEUE[user_id] = [] # Initialize an empty list for the user
-    app.send_message(message.chat.id,
-                     f"Album collection started! 🚀\n"
-                     f"Send me up to **{MAX_ALBUM_SIZE}** video files.\n"
-                     f"When you are finished, use the /sendalbum command.\n"
-                     f"Use /cancelalbum to stop.",
-                     reply_to_message_id=message.id)
+        with open(statusfile,"r") as upread:
+            txt = upread.read()
+        
+        #if "%" not in txt:
+                #txt = "0.0%"
 
-@app.on_message(filters.command(['cancelalbum']))
-def cancel_album(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    user_id = message.from_user.id
-    if user_id in ALBUM_QUEUE:
-        del ALBUM_QUEUE[user_id]
-        app.send_message(message.chat.id, "Album collection cancelled. Queue cleared. 👍", reply_to_message_id=message.id)
-    else:
-        app.send_message(message.chat.id, "You don't have an active album collection to cancel. 🤔", reply_to_message_id=message.id)
+        try:
+            app.edit_message_text(message.chat.id, message.id, f"__Downloaded__ : **{txt}**")
+            #if txt == "100.0%":
+                #break
+            time.sleep(10)
+        except:
+            time.sleep(5)
 
-@app.on_message(filters.command(['sendalbum']))
-def send_album_command(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    user_id = message.from_user.id
-
-    if user_id not in ALBUM_QUEUE:
-        app.send_message(message.chat.id, "You haven't started an album collection. Use /startalbum first. 🤷‍♂️", reply_to_message_id=message.id)
-        return
-
-    video_messages = ALBUM_QUEUE[user_id]
-
-    if not video_messages:
-        app.send_message(message.chat.id, "Your album queue is empty! Send some videos first. 텅 빈", reply_to_message_id=message.id)
-        return
-
-    if len(video_messages) > MAX_ALBUM_SIZE:
-         app.send_message(message.chat.id, f"You have too many videos ({len(video_messages)}). The maximum is {MAX_ALBUM_SIZE}. Please use /cancelalbum and start over.", reply_to_message_id=message.id)
-         # Optionally clear the queue here: del ALBUM_QUEUE[user_id]
-         return
-
-    # Send processing message
-    processing_msg = app.send_message(message.chat.id, f"Processing {len(video_messages)} videos for the album... ⏳", reply_to_message_id=message.id)
-
-    # Start processing in a separate thread to avoid blocking
-    album_thread = threading.Thread(target=process_and_send_album, args=(user_id, video_messages, processing_msg), daemon=True)
-    album_thread.start()
-
-    # Clear the user's queue immediately after starting the thread
-    # Ensure the key exists before deleting, although the check above should handle it
-    if user_id in ALBUM_QUEUE:
-         del ALBUM_QUEUE[user_id]
-
-
-# Helper function to process and send the album (runs in a thread)
-def process_and_send_album(user_id, video_messages, processing_msg):
-    media_group = []
-    downloaded_files = [] # Keep track of files to delete later
-    chat_id = processing_msg.chat.id # Get chat_id from the message
-
-    try:
-        total_videos = len(video_messages)
-        for i, vid_msg in enumerate(video_messages):
-            # Update progress
-            try:
-                # Ensure message object is valid before editing
-                if processing_msg:
-                     app.edit_message_text(chat_id, processing_msg.id,
-                                           f"Processing album... Downloading video {i+1}/{total_videos} 📥")
-            except Exception as e:
-                 print(f"Could not edit album progress message: {e}") # Continue even if editing fails
-
-            # --- Download the video ---
-            print(f"Downloading video {i+1} for album...")
-            file_path = None # Initialize file_path
-            try:
-                # Use the message object directly for download
-                file_path = app.download_media(vid_msg)
-                if not file_path or not os.path.exists(file_path):
-                     raise ValueError("Download failed or file path invalid.")
-                downloaded_files.append(file_path)
-                print(f"Downloaded {file_path}")
-
-                # --- Create InputMediaVideo ---
-                caption = vid_msg.caption if vid_msg.caption else ""
-                # Ensure caption is a string
-                caption = str(caption) if caption is not None else ""
-
-                # Get video metadata for better streaming experience (optional but recommended)
-                thumb_path = None
-                duration = 0
-                width = 0
-                height = 0
-                try:
-                    # Check if the message itself has video attributes
-                    if vid_msg.video:
-                        duration = vid_msg.video.duration or 0
-                        width = vid_msg.video.width or 0
-                        height = vid_msg.video.height or 0
-                        if vid_msg.video.thumbs:
-                            # Download the best quality thumb available
-                            thumb_path = app.download_media(vid_msg.video.thumbs[-1].file_id)
-                            downloaded_files.append(thumb_path) # Add thumb to cleanup list
-                    else: # Fallback if attributes not directly on message (e.g., forwarded)
-                         thumb_path, duration, width, height = mediainfo.allinfo(file_path)
-                         if thumb_path: downloaded_files.append(thumb_path) # Add thumb to cleanup list
-
-                except Exception as meta_err:
-                     print(f"Warning: Could not get metadata for video {i+1}: {meta_err}")
-                     # Use defaults if metadata extraction fails
-
-
-                media_group.append(
-                    InputMediaVideo(
-                        media=file_path,
-                        caption=caption,
-                        thumb=thumb_path,
-                        duration=duration,
-                        width=width,
-                        height=height
-                        )
-                    )
-
-            except Exception as download_err:
-                print(f"Error downloading/processing video {i+1} (Msg ID: {vid_msg.id}) for album: {download_err}")
-                # Clean up partially downloaded file if it exists
-                if file_path and os.path.exists(file_path) and file_path not in downloaded_files:
-                     try: os.remove(file_path)
-                     except OSError: pass
-                # Notify user about the skipped video
-                try:
-                    # Ensure processing_msg is valid before using its chat_id
-                    if processing_msg:
-                         app.send_message(chat_id, f"⚠️ Couldn't process video {i+1}, it will be skipped. Error: {download_err}",
-                                          reply_to_message_id=vid_msg.id) # Reply to the original video message
-                except Exception: pass # Ignore if sending fails
-                continue # Skip to the next video
-
-        # --- Send the Album ---
-        if media_group:
-            try:
-                 # Ensure processing_msg is valid before editing
-                 if processing_msg:
-                      app.edit_message_text(chat_id, processing_msg.id, f"Uploading album with {len(media_group)} videos... 📤")
-            except Exception: pass # Ignore if editing fails
-
-            try:
-                print(f"Sending media group with {len(media_group)} items to chat {chat_id}.")
-                app.send_media_group(
-                    chat_id=chat_id,
-                    media=media_group
-                )
-                print("Media group sent successfully.")
-                # Delete the processing message after successful sending
-                try:
-                    # Ensure processing_msg is valid before deleting
-                    if processing_msg:
-                         app.delete_messages(chat_id, processing_msg.id)
-                except Exception as del_err:
-                    print(f"Could not delete processing message: {del_err}")
-
-            except Exception as send_err:
-                print(f"Error sending media group: {send_err}")
-                error_text = f"❌ Failed to send the album. Error: {send_err}"
-                try:
-                    # Ensure processing_msg is valid before editing
-                    if processing_msg:
-                         app.edit_message_text(chat_id, processing_msg.id, error_text)
-                    else: # If original message gone, send a new one
-                         app.send_message(chat_id, error_text)
-                except Exception: # Fallback if edit fails
-                     app.send_message(chat_id, error_text)
-
-        elif downloaded_files: # If all downloads failed but we have files
-             print("Media group is empty, but files were downloaded. Sending error message.")
-             error_text = "❌ Failed to process any videos for the album."
-             try:
-                 # Ensure processing_msg is valid before editing
-                 if processing_msg:
-                      app.edit_message_text(chat_id, processing_msg.id, error_text)
-                 else:
-                      app.send_message(chat_id, error_text)
-             except Exception:
-                 app.send_message(chat_id, error_text)
-        else: # No videos processed, queue was likely empty initially (shouldn't happen due to earlier check)
-             print("Media group is empty and no files were downloaded.")
-             try:
-                 # Ensure processing_msg is valid before deleting
-                 if processing_msg:
-                      app.delete_messages(chat_id, processing_msg.id)
-             except Exception: pass
-
-
-    finally:
-        # --- Cleanup Downloaded Files ---
-        print(f"Cleaning up {len(downloaded_files)} downloaded album files...")
-        for f in downloaded_files:
-            if f and os.path.exists(f): # Check if f is not None before checking path
-                try:
-                    os.remove(f)
-                    print(f"Removed temp file: {f}")
-                except OSError as e:
-                    print(f"Error removing temp file {f}: {e}")
-        print("Album processing finished.") # الى هنا تعديل جوجل 
 
 # app messages
 @app.on_message(filters.command(['start']))
@@ -1558,53 +1200,17 @@ def annimations(client: pyrogram.client.Client, message: pyrogram.types.messages
 
 # video
 @app.on_message(filters.video)
-def video_handler(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    user_id = message.from_user.id
-
-    # Check if user is currently collecting an album
-    if user_id in ALBUM_QUEUE:
-        if len(ALBUM_QUEUE[user_id]) < MAX_ALBUM_SIZE:
-            ALBUM_QUEUE[user_id].append(message) # Add the whole message object
-            count = len(ALBUM_QUEUE[user_id])
-            app.send_message(message.chat.id,
-                             f"✅ Video added to album queue ({count}/{MAX_ALBUM_SIZE}).\n"
-                             f"Send more videos or use /sendalbum when ready.",
-                             reply_to_message_id=message.id)
-        else:
-            app.send_message(message.chat.id,
-                             f"Album queue is full ({MAX_ALBUM_SIZE} videos)! 🈵\n"
-                             f"Use /sendalbum to send the current album or /cancelalbum to start over.",
-                             reply_to_message_id=message.id)
-    else:
-        # --- Default behavior: Handle as single video for conversion/streaming ---
-        # حفظ الرسالة كفيديو (للاستخدام المحتمل مع الأوامر الأخرى مثل /rename)
-        saveMsg(message, "VIDEO")
-
-        # --- الخيار 1: إرساله مباشرة كبث (كما في الكود الأصلي) ---
-        # oldm = app.send_message(message.chat.id, '__Sending in Stream Format__', reply_to_message_id=message.id)
-        # sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
-        # sv.start()
-
-        # --- الخيار 2: عرض خيارات التحويل (كما في معالج المستندات) ---
-        # هذا يتطلب أن يكون للفيديو اسم ملف، قد لا يكون موجودًا دائمًا
-        try:
-            # Try to get a filename, default if missing
-            filename = message.video.file_name if message.video.file_name else "video.mp4"
-            dext = filename.split(".")[-1].upper() if '.' in filename else "VIDEO"
-        except:
-             dext = "VIDEO" # Fallback
-
-        # Prompt for conversion options like other file types
-        app.send_message(message.chat.id,
-                         f'__Detected Video Format:__ **{dext}** 📹\n'
-                         f'__Choose an option:__\n\n'
-                         f'1. **Convert:** Select a format below.\n'
-                         f'2. **Album:** Use /startalbum first, then send videos.\n'
-                         f'3. **Rename:** Use /rename NewName.ext\n'
-                         f'4. **Cancel:** Use /cancel\n\n'
-                         f'--**Available Conversion Formats**-- \n__{VA_TEXT}__',
-                         reply_markup=VAboard, # Use the existing video/audio board
-                         reply_to_message_id=message.id)
+@app.on_message(filters.video)
+def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    # حفظ الرسالة كفيديو
+    saveMsg(message, "VIDEO")
+    
+    # إرسال رسالة مؤقتة للمستخدم تشير إلى أن الفيديو يتم إرساله
+    oldm = app.send_message(message.chat.id, '__Sending in Stream Format__', reply_to_message_id=message.id)
+    
+    # تشغيل وظيفة sendvideo في خيط جديد
+    sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
+    sv.start()
 
 # video note
 @app.on_message(filters.video_note)
