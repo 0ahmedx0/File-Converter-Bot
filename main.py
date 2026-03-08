@@ -1207,11 +1207,38 @@ def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_an
     # -- المعالجة لأنواع الملفات الأخرى --
     # ملاحظة: لا يتم استدعاء removeSavedMsg هنا لأننا ننتظر رد المستخدم
 
-    # IMG
+    # IMG (New Behavior: Auto-convert document image to PNG)
     elif message.document.file_name.upper().endswith(IMG):
+        print(f"Detected {dext} document (IMG), auto-converting to PNG.")
+        inputt = message.document.file_name
+        oldext = dext.lower()
+        newext = "png"
+        
+        # التأكد من أنه ليس PNG مسبقاً لمنع الحلقة المفرغة والتحويل بلا داعي
+        if oldext == "png":
+            msg = app.send_message(message.chat.id, '__The file is already a PNG.__', reply_to_message_id=message.id)
+            removeSavedMsg(message)
+            return
+            
+        # إرسال رسالة تأكيد البدء للمستخدم
+        msg = app.send_message(message.chat.id,
+                               f'__Detected {dext} image file. Automatically converting to PNG...__',
+                               reply_markup=ReplyKeyboardRemove(),
+                               reply_to_message_id=message.id)
+
+        # تحويل مسار المعالجة
+        conv = threading.Thread(target=lambda: follow(message, inputt, newext, oldext, msg), daemon=True)
+        conv.start()
+        
+        removeSavedMsg(message) # حذفنا الانتظار لأن العملية تلقائية
+        return
+        
+        ''' 
+        الكود القديم الخاص بطلب إدخال امتداد تم الحفاظ عليه كتعليق لتفادي كسر المستودع أو المنطق لمن يريد استعادته
         app.send_message(message.chat.id,
                          f'__Detected Extension:__ **{dext}** 📷\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{IMG_TEXT}__\n\n**SPECIAL** 🎁\n__Colorize, Positive, Upscale & Scan__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
                          reply_markup=IMGboard, reply_to_message_id=message.id)
+        '''
 
     # LBW
     elif message.document.file_name.upper().endswith(LBW):
@@ -1423,13 +1450,30 @@ def voice(client: pyrogram.client.Client, message: pyrogram.types.messages_and_m
                 reply_markup=VAboard, reply_to_message_id=message.id)
 
 
-# photo
+# photo (New Behavior: Auto-convert normal sent photos to PNG)
 @app.on_message(filters.photo)
 def photo(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    # لا داعي لحفظ الرسالة في state لأننا لن ننتظر رد من المستخدم (لكن الكود القديم موجود كتعليق)
+    '''
     saveMsg(message, "PHOTO")
     app.send_message(message.chat.id,
                      f'__Detected Extension:__ **JPG** 📷\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{IMG_TEXT}__\n\n**SPECIAL** 🎁\n__Colorize, Positive, Upscale & Scan__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
                      reply_markup=IMGboard, reply_to_message_id=message.id)
+    '''
+    print("Detected Photo, auto-converting to PNG.")
+    
+    inputt = "photo.jpg" # ملف الصور المُرسلة عادي ينزل كـ jpg في بايروجرام
+    oldext = "jpg"
+    newext = "png"
+    
+    msg = app.send_message(message.chat.id,
+                           '__Detected photo. Automatically converting to PNG...__',
+                           reply_markup=ReplyKeyboardRemove(),
+                           reply_to_message_id=message.id)
+
+    # بدء أمر التحويل بشكل تلقائي
+    conv = threading.Thread(target=lambda: follow(message, inputt, newext, oldext, msg), daemon=True)
+    conv.start()
 
 
 # sticker
