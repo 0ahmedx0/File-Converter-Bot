@@ -40,6 +40,9 @@ def getSavedMsg(msg):
     return MESGS.get(msg.from_user.id, [None, None])
 
 def removeSavedMsg(msg):
+    # استخدم .pop() مع قيمة افتراضية لتجنب KeyError
+    # إذا كان المفتاح موجودًا، فسيتم حذفه وإرجاع قيمته (التي لا نستخدمها هنا).
+    # إذا لم يكن المفتاح موجودًا، فسيتم إرجاع None ولن يحدث خطأ.
     MESGS.pop(msg.from_user.id, None)
 
 
@@ -54,7 +57,7 @@ def follow(message,inputt,new,old,oldmessage):
         print("It is VID/AUD option")
 
         file,msg = down(message)
-        srclink = helperfunctions.videoinfo(file) 
+        srclink = helperfunctions.videoinfo(file) # لا يزال يُحسب لكنه لن يُستخدم في الوصف
         cmd = helperfunctions.ffmpegcommand(file,output,new)
 
         if msg != None:
@@ -62,11 +65,15 @@ def follow(message,inputt,new,old,oldmessage):
 
         os.system(cmd)
         os.remove(file)
-        conlink = helperfunctions.videoinfo(output) 
+        conlink = helperfunctions.videoinfo(output) # لا يزال يُحسب لكنه لن يُستخدم في الوصف
 
         if os.path.exists(output) and os.path.getsize(output) > 0:
+            # تم إزالة إنشاء متغير caption لأنه لم يعد مستخدماً هنا
+            # caption=f'**Source File** : __{srclink}__\n\n**Converted File** : __{conlink}__'
             app.send_chat_action(message.chat.id, enums.ChatAction.UPLOAD_DOCUMENT)
-            up(message,output,msg) 
+            # --- تم تعديل الاستدعاء هنا ---
+            up(message,output,msg) # لم نعد نمرر الوصف 'caption'
+            # -----------------------------
         else:
             app.send_message(message.chat.id,"__Error while Conversion__", reply_to_message_id=message.id)
 
@@ -162,6 +169,7 @@ def follow(message,inputt,new,old,oldmessage):
         print("It is LibreOffice option")
         file = app.download_media(message)
         cmd = helperfunctions.libreofficecommand(file,new)
+        # os.system(cmd)
         subprocess.run([cmd],env={"HOME": "."},)
         os.remove(file)
 
@@ -397,7 +405,7 @@ def genratevideos(message,prompt):
     msg = app.send_message(message.chat.id,f"**Prompt received and Request is sent. Expected waiting time is {(queuepos+1)*3} mins**", reply_to_message_id=message.id)
 
     file = aifunctions.cogvideostatus(hash,prompt)
-    app.send_video(message.chat.id, video=file, reply_to_message_id=message.id) 
+    app.send_video(message.chat.id, video=file, reply_to_message_id=message.id) #,caption=f"COGVIDEO : {prompt}")
     os.remove(file)
     app.delete_messages(message.chat.id,message_ids=msg.id)
 
@@ -431,28 +439,49 @@ def readf(message,oldmessage):
     os.remove(file)
     app.delete_messages(message.chat.id,message_ids=oldmessage.id)
 
-
+# send local video file as streamable video
 def send_local_video(original_message, local_video_path, processing_msg):
+    """
+    Sends an existing local video file as a streamable video message,
+    using the 'up' function for progress reporting.
+
+    Args:
+        original_message: The original message object (for context and reply_to_id).
+        local_video_path: The path to the local video file to send.
+        processing_msg: The 'Processing...' message object to update/delete.
+    """
     try:
         print(f"Sending local video: {local_video_path}")
+        # الحصول على معلومات الفيديو (للصورة المصغرة والمدة والأبعاد)
         thumb, duration, width, height = mediainfo.allinfo(local_video_path)
 
+        # استخدام دالة 'up' للرفع مع التقدم، مع التأكد من video=True
+        # تمرير الرسالة الأصلية للحصول على reply_to_message_id وسياق التقدم
+        # تمرير رسالة المعالجة 'processing_msg' لتحديث الحالة أثناء الرفع (إذا كان الملف كبيرًا)
         up(original_message, local_video_path, processing_msg, video=True,
+           # يمكنك تعديل الوصف إذا أردت، أو تركه باسم الملف
            capt=f'**{local_video_path.split("/")[-1]}**',
-           thumb=thumb, duration=duration, height=height, widht=width) 
+           thumb=thumb, duration=duration, height=height, widht=width) # Note: 'widht' might be a typo in original 'up' call, consider fixing to 'width'
+
+        # دالة 'up' ستحذف رسالة processing_msg إذا لم يكن الرفع متعددًا (multi=False)
+        # لا حاجة لحذفها هنا بشكل صريح إلا إذا واجهت مشاكل
 
     except Exception as e:
         print(f"Error in send_local_video: {e}")
         try:
             app.send_message(original_message.chat.id, f"__Error sending converted video: {e}__", reply_to_message_id=original_message.id)
+            # محاولة حذف رسالة المعالجة عند الخطأ أيضًا
             if processing_msg:
                  app.delete_messages(original_message.chat.id, message_ids=processing_msg.id)
         except:
-            pass 
+            pass # تجاهل أخطاء الحذف
 
     finally:
+        # التنظيف: حذف الملف المحلي الذي تم رفعه والصورة المصغرة (إذا وجدت)
+        # دالة up تحذف الصورة المصغرة، لكن التأكيد جيد
         if os.path.exists(local_video_path):
             os.remove(local_video_path)
+        # تحقق من وجود المتغير thumb قبل محاولة الحذف
         if 'thumb' in locals() and thumb and os.path.exists(thumb):
             os.remove(thumb)
 
@@ -890,8 +919,13 @@ def upstatus(statusfile,message):
         with open(statusfile,"r") as upread:
             txt = upread.read()
 
+        #if "%" not in txt:
+                #txt = "0.0%"
+
         try:
             app.edit_message_text(message.chat.id, message.id, f"__Uploaded__ : **{txt}**")
+            #if txt == "100.0%":
+                #break
             time.sleep(10)
         except:
             time.sleep(5)
@@ -910,8 +944,13 @@ def downstatus(statusfile,message):
         with open(statusfile,"r") as upread:
             txt = upread.read()
         
+        #if "%" not in txt:
+                #txt = "0.0%"
+
         try:
             app.edit_message_text(message.chat.id, message.id, f"__Downloaded__ : **{txt}**")
+            #if txt == "100.0%":
+                #break
             time.sleep(10)
         except:
             time.sleep(5)
@@ -982,12 +1021,15 @@ def cancel(client: pyrogram.client.Client, message: pyrogram.types.messages_and_
 # imagen command
 @app.on_message(filters.command(["imagegen"]))
 def getpompt(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    
+	# getting prompt from the text
 	try:
 		prompt = message.text.split("/imagegen ")[1]
 	except:
 		app.send_message(message.chat.id,'__Send Prompt with Command,\nUsage :__ **/imagegen dog with funny hat**', reply_to_message_id=message.id)
 		return	
 
+	# threding	
 	msg = app.send_message(message.chat.id,"__Prompt received and Request is sent. Waiting time is 1-2 mins__", reply_to_message_id=message.id)
 	ai = threading.Thread(target=lambda:genrateimages(message,prompt,msg),daemon=True)
 	ai.start()
@@ -996,12 +1038,15 @@ def getpompt(client: pyrogram.client.Client, message: pyrogram.types.messages_an
 # music gen
 @app.on_message(filters.command(["musicgen"]))
 def getpompt(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    
+	# getting prompt from the text
 	try:
 		prompt = message.text.split("/musicgen ")[1]
 	except:
 		app.send_message(message.chat.id,'__Send Prompt with Command,\nUsage :__ **/musicgen a slow, emotional piano ballad in the key of C Major with a tempo of 60 BPM and a time signature of 4/4.**', reply_to_message_id=message.id)
 		return	
 
+	# threding	
 	msg = app.send_message(message.chat.id,"__Prompt received and Request is sent. Waiting time is 1 minute__", reply_to_message_id=message.id)
 	mai = threading.Thread(target=lambda:genratemusic(message,prompt,msg),daemon=True)
 	mai.start()
@@ -1109,6 +1154,8 @@ def inbtwn(client: pyrogram.client.Client, call: pyrogram.types.CallbackQuery):
 	if call.data[:4] == "TTT ": return tictactoe.TTTgame(app,call,call.message)
 	elif call.data[:2] == "G ": return guess.Ggame(app,call)
 
+
+# document
 @app.on_message(filters.document)
 def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
     # حفظ الرسالة ونوعها ("DOCUMENT") أولاً
@@ -1116,22 +1163,46 @@ def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_an
     # استخراج الامتداد وتحويله للأحرف الكبيرة
     dext = message.document.file_name.split(".")[-1].upper()
 
-    # التحقق إذا كان الملف فيديو من نوع MOV أو MP4
-    if dext in ["MOV", "MP4"]:
-        print(f"Detected {dext} document, triggering sendvideo.")
-        oldm = app.send_message(
-            message.chat.id,
-            f'__Processing {dext} file to send as video stream...__',
-            reply_markup=ReplyKeyboardRemove(),
-            reply_to_message_id=message.id
-        )
-        sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
-        sv.start()
-        removeSavedMsg(message)
-        return
+    # التحقق إذا كان الملف فيديو أو صوتي (VIDAUD معرف في buttons.py)
+    if message.document.file_name.upper().endswith(VIDAUD):
 
-    # باقي الكود كما هو...
+        # أولاً: تحقق إذا كان الامتداد هو MOV بالتحديد
+        if dext == "MOV":
+            print("Detected MOV document, triggering sendvideo.")
+            # إرسال رسالة مؤقتة للمستخدم
+            oldm = app.send_message(message.chat.id,
+                                    '__Processing MOV file to send as video stream...__',
+                                    reply_markup=ReplyKeyboardRemove(),
+                                    reply_to_message_id=message.id)
+            # تشغيل sendvideo في خيط منفصل
+            sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
+            sv.start()
+            # إزالة الحالة المحفوظة لأننا عالجناها مباشرة ولا ننتظر رداً
+            removeSavedMsg(message)
+            # الخروج من الدالة documnet
+            return
 
+        # ثانياً: إذا لم يكن MOV ولكنه لا يزال فيديو/صوت (VIDAUD)، قم بالتحويل التلقائي إلى MOV
+        else:
+            print(f"Detected {dext} document (VIDAUD), auto-converting to MOV.")
+            inputt = message.document.file_name
+            oldext = dext.lower()
+            newext = "mov"
+
+            # إرسال رسالة تأكيد بدء التحويل التلقائي
+            msg = app.send_message(message.chat.id,
+                                   f'__Detected {dext} file. Automatically converting to {newext.upper()}...__',
+                                   reply_markup=ReplyKeyboardRemove(),
+                                   reply_to_message_id=message.id)
+
+            # بدء عملية التحويل في خيط منفصل
+            conv = threading.Thread(target=lambda: follow(message, inputt, newext, oldext, msg), daemon=True)
+            conv.start()
+
+            # إزالة الحالة المحفوظة لأننا عالجناها مباشرة ولا ننتظر رداً
+            removeSavedMsg(message)
+            # الخروج من الدالة documnet
+            return
 
     # -- المعالجة لأنواع الملفات الأخرى --
     # ملاحظة: لا يتم استدعاء removeSavedMsg هنا لأننا ننتظر رد المستخدم
@@ -1178,11 +1249,13 @@ def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_an
                          f'__Detected Extension:__ **{dext}** 🗄\n__Do you want to Extract ?__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
                          reply_markup=ARCboard, reply_to_message_id=message.id)
 
-    # TOR 
+    # TOR (حالة خاصة، لا تنتظر رداً)
     elif message.document.file_name.upper().endswith("TORRENT"):
+        # بدء الإجراء مباشرة
         oldm = app.send_message(message.chat.id,'__Getting Magnet Link__', reply_to_message_id=message.id)
         ml = threading.Thread(target=lambda:getmag(message,oldm),daemon=True)
         ml.start()
+        # إزالة الحالة فوراً والخروج
         removeSavedMsg(message)
         return
 
@@ -1204,126 +1277,108 @@ def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_an
                          f'__Detected Extension:__ **{dext}** 💠 \n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{T3D_TEXT}__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
                          reply_markup=T3Dboard, reply_to_message_id=message.id)
 
-    # else 
+    # else (لم يتطابق مع أي نوع مدعوم ينتظر ردًا)
     else:
+        # إرسال رسالة عدم الدعم
         app.send_message(message.chat.id,'__No Available Conversions found.\n\nYou can use:__\n**/rename new-filename** __to Rename__\n**/read** __to Read the File__')
+        # إزالة الحالة المحفوظة هنا لأننا لا نتوقع أي إجراء آخر لهذه الرسالة
         removeSavedMsg(message)    
-
 
 # animation
 @app.on_message(filters.animation)
 def annimations(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    """
+    Handles incoming animation messages.
+    Automatically converts them to MOV and sends as a streamable video.
+    """
+    # إرسال رسالة مؤقتة للمستخدم
     processing_msg = app.send_message(message.chat.id,
                                       '__Processing animation: Converting to MOV and sending as video...__',
                                       reply_markup=ReplyKeyboardRemove(),
                                       reply_to_message_id=message.id)
 
+    # بدء عملية التنزيل والتحويل والإرسال في خيط منفصل
+    # نمرر الرسالة الأصلية ورسالة المعالجة
     conv_thread = threading.Thread(target=lambda: process_animation_to_video(message, processing_msg), daemon=True)
     conv_thread.start()
 
+# دالة مساعدة لتنفيذ العملية الفعلية في الخيط
 def process_animation_to_video(message, processing_msg):
+    """
+    Downloads animation, converts to MOV, sends using send_local_video, and cleans up.
+    Meant to be run in a separate thread.
+    """
     original_file = None
     output_file = None
     new_ext = "mov"
 
     try:
         print("Processing animation...")
-        original_file, down_msg = down(message) 
+        # 1. تنزيل ملف الـ Animation (استخدام دالة down للتقدم)
+        original_file, down_msg = down(message) # down() ستحفظه باسم مؤقت
 
+        # تحديث رسالة الحالة إذا كان هناك رسالة للتقدم من down()
         if down_msg:
             try: app.edit_message_text(message.chat.id, down_msg.id, "__Download Complete. Converting to MOV...__")
-            except: pass 
+            except: pass # تجاهل الأخطاء (قد تكون الرسالة حُذفت)
+            # حذف رسالة التقدم الخاصة بـ down إذا كانت منفصلة عن processing_msg
             if down_msg.id != processing_msg.id:
                  try: app.delete_messages(message.chat.id, message_ids=down_msg.id)
                  except: pass
 
+        # 2. تحديد اسم ملف الإخراج
+        # استخدام المسار الذي تم تنزيله بواسطة down() لتحديد اسم الإخراج
         output_file = helperfunctions.updtname(original_file, new_ext)
 
+        # 3. إنشاء وتشغيل أمر FFmpeg للتحويل إلى MOV
+        # نفترض أن الإدخال هو MP4 (الأكثر شيوعًا للـ Animations)
+        # يجب أن تكون دالة ffmpegcommand قادرة على التعامل مع المسارات الكاملة
         cmd = helperfunctions.ffmpegcommand(original_file, output_file, new_ext)
         print(f"Running FFmpeg command: {cmd}")
         return_code = os.system(cmd)
 
+        # حذف الملف الأصلي الذي تم تنزيله بعد محاولة التحويل
         if os.path.exists(original_file):
             os.remove(original_file)
-            original_file = None 
+            original_file = None # تعيينه إلى None للإشارة إلى أنه تم حذفه
 
+        # 4. التحقق من نجاح التحويل
         if return_code == 0 and os.path.exists(output_file) and os.path.getsize(output_file) > 0:
             print(f"Conversion to MOV successful: {output_file}")
+            # 5. استدعاء دالة الإرسال الجديدة بالملف المحول
             send_local_video(message, output_file, processing_msg)
+            # ملاحظة: send_local_video ستقوم بحذف output_file بعد الرفع
 
         else:
+            # حدث خطأ أثناء التحويل
             print(f"FFmpeg conversion failed. Return code: {return_code}, Output exists: {os.path.exists(output_file)}, Size: {os.path.getsize(output_file) if os.path.exists(output_file) else 'N/A'}")
             app.send_message(message.chat.id, "__Error during animation conversion to MOV.__", reply_to_message_id=message.id)
+            # حذف رسالة المعالجة لأن العملية فشلت
             if processing_msg:
                 try: app.delete_messages(message.chat.id, message_ids=processing_msg.id)
                 except: pass
+            # التأكد من حذف ملف الإخراج إذا تم إنشاؤه ولكنه فارغ أو تالف
             if output_file and os.path.exists(output_file):
                  os.remove(output_file)
 
     except Exception as e:
         print(f"Error processing animation: {e}")
+        import traceback
+        traceback.print_exc() # طباعة تتبع الخطأ الكامل للمساعدة في التشخيص
         try:
             app.send_message(message.chat.id, f"__An unexpected error occurred: {e}__", reply_to_message_id=message.id)
             if processing_msg:
                 app.delete_messages(message.chat.id, message_ids=processing_msg.id)
         except:
             pass
+        # التنظيف النهائي عند حدوث أي خطأ
         if original_file and os.path.exists(original_file):
             os.remove(original_file)
         if output_file and os.path.exists(output_file):
             os.remove(output_file)
 
-
-# -------------------------------------------------------------
-# الإضافة الخاصة بمعالجة أي صورة مباشرة وإرسالها כـ PNG تلقائيا
-# -------------------------------------------------------------
-def direct_photo_to_png(message, msg):
-    try:
-        # 1- تنزيل الصورة كملف مباشر
-        file = app.download_media(message)
-        
-        # 2- إيجاد مسار الإخراج وتغيير الصيغة لـ PNG
-        output = helperfunctions.updtname(file, "png")
-        
-        # 3- استخدام الأمر الموجود مسبقاً في البوت للتحويل للصورة
-        cmd = helperfunctions.magickcommand(file, output, "png")
-        os.system(cmd)
-        
-        # حذف الصورة التي نزلت في البداية لتوفير المساحة
-        if os.path.exists(file):
-            os.remove(file)
-            
-        # 4- رفع الناتج الجديد وإرساله كمستند (File) كما يعمل البوت
-        if os.path.exists(output) and os.path.getsize(output) > 0:
-            app.send_chat_action(message.chat.id, enums.ChatAction.UPLOAD_DOCUMENT)
-            # دالة الرفع الأساسية
-            up(message, output, msg)
-        else:
-            app.send_message(message.chat.id, "__Error while converting Photo to PNG__", reply_to_message_id=message.id)
-            if msg != None:
-                app.delete_messages(message.chat.id, message_ids=msg.id)
-
-        # مسح صورة הPNG من السيرفر بعد ارسالها للمستخدم 
-        if os.path.exists(output):
-            os.remove(output)
-
-    except Exception as e:
-        app.send_message(message.chat.id, f"__Error: {e}__", reply_to_message_id=message.id)
-        if msg != None:
-            app.delete_messages(message.chat.id, message_ids=msg.id)
-
-@app.on_message(filters.photo)
-def photo(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    # اظهار رسالة قيد المعالجة مباشرة فور ارسال الصورة من قبل المستخدم
-    processing_msg = app.send_message(message.chat.id, '__Processing Photo: Converting to PNG directly...__', reply_to_message_id=message.id)
-    
-    # تشغيل أمر المعالجة المباشر خلف الكواليس كخيط (Thread) لعدم تجميد البوت
-    conv_thread = threading.Thread(target=lambda: direct_photo_to_png(message, processing_msg), daemon=True)
-    conv_thread.start()
-# -------------------------------------------------------------
-
-
 # video
+@app.on_message(filters.video)
 @app.on_message(filters.video)
 def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
     # حفظ الرسالة كفيديو
@@ -1335,7 +1390,6 @@ def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_m
     # تشغيل وظيفة sendvideo في خيط جديد
     sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
     sv.start()
-
 
 # video note
 @app.on_message(filters.video_note)
@@ -1367,6 +1421,15 @@ def voice(client: pyrogram.client.Client, message: pyrogram.types.messages_and_m
     app.send_message(message.chat.id,
                 f'__Detected Extension:__ **OGG** 📹 / 🔊\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{VA_TEXT}__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
                 reply_markup=VAboard, reply_to_message_id=message.id)
+
+
+# photo
+@app.on_message(filters.photo)
+def photo(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    saveMsg(message, "PHOTO")
+    app.send_message(message.chat.id,
+                     f'__Detected Extension:__ **JPG** 📷\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{IMG_TEXT}__\n\n**SPECIAL** 🎁\n__Colorize, Positive, Upscale & Scan__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
+                     reply_markup=IMGboard, reply_to_message_id=message.id)
 
 
 # sticker
