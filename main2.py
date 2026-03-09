@@ -1351,6 +1351,61 @@ def process_animation_to_video(message, processing_msg):
         if output_file and os.path.exists(output_file):
             os.remove(output_file)
 
+# الدالة الجديدة لتحويل أي صورة (Photo) مُرسلة إلى PNG تلقائياً (كأنها فيديو مباشر)
+def process_photo_to_png(message, processing_msg):
+    original_file = None
+    output_file = None
+    new_ext = "png"
+    
+    try:
+        print("Processing photo to PNG...")
+        # 1. تنزيل الصورة المرسلة باستخدام نفس آلية البوت المعتمدة للتقدم
+        original_file, down_msg = down(message)
+        
+        # إذا تواجدت رسالة التنزيل نظراً لحجمها نقوم بتحديثها وحذفها إن لزم
+        if down_msg:
+            try: app.edit_message_text(message.chat.id, down_msg.id, "__Download Complete. Converting to PNG...__")
+            except: pass
+            if down_msg.id != processing_msg.id:
+                 try: app.delete_messages(message.chat.id, message_ids=down_msg.id)
+                 except: pass
+                 
+        # تحديد اسم المخرج وتحويل الصيغة الى PNG عبر مكتبة البوت 
+        output_file = helperfunctions.updtname(original_file, new_ext)
+        cmd = helperfunctions.magickcommand(original_file, output_file, new_ext)
+        print(f"Running ImageMagick command: {cmd}")
+        os.system(cmd)
+        
+        # ازالة الصورة الأولية بعد المعالجة
+        if os.path.exists(original_file):
+            os.remove(original_file)
+            original_file = None
+            
+        # التحقق ثم ارسال الصورة المعدلة كمستند (ليتم الاحتفاظ بالدقة و صيغة PNG الحقيقية)
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            print(f"Conversion to PNG successful: {output_file}")
+            up(message, output_file, processing_msg) 
+        else:
+            app.send_message(message.chat.id, "__Error during photo conversion to PNG.__", reply_to_message_id=message.id)
+            if processing_msg:
+                try: app.delete_messages(message.chat.id, message_ids=processing_msg.id)
+                except: pass
+                
+    except Exception as e:
+        print(f"Error processing photo: {e}")
+        try:
+            app.send_message(message.chat.id, f"__An unexpected error occurred: {e}__", reply_to_message_id=message.id)
+            if processing_msg:
+                app.delete_messages(message.chat.id, message_ids=processing_msg.id)
+        except:
+            pass
+    finally:
+        # تأكيد التنظيف في حال وجود اي ملف معلق
+        if original_file and os.path.exists(original_file):
+            os.remove(original_file)
+        if output_file and os.path.exists(output_file):
+            os.remove(output_file)
+
 # video
 @app.on_message(filters.video)
 @app.on_message(filters.video)
@@ -1396,14 +1451,19 @@ def voice(client: pyrogram.client.Client, message: pyrogram.types.messages_and_m
                 f'__Detected Extension:__ **OGG** 📹 / 🔊\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{VA_TEXT}__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
                 reply_markup=VAboard, reply_to_message_id=message.id)
 
-
-# photo
+# photo تم التعديل عليه ليعمل تلقائيا دون قائمة التحويل
 @app.on_message(filters.photo)
 def photo(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    saveMsg(message, "PHOTO")
-    app.send_message(message.chat.id,
-                     f'__Detected Extension:__ **JPG** 📷\n__Now send extension to Convert to...__\n\n--**Available formats**-- \n\n__{IMG_TEXT}__\n\n**SPECIAL** 🎁\n__Colorize, Positive, Upscale & Scan__\n\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
-                     reply_markup=IMGboard, reply_to_message_id=message.id)
+    # لا نقوم هنا بحفظ الرسالة saveMsg لانها ستُعالج مباشرة، ولا ننتظر ردا نصيا.
+    processing_msg = app.send_message(
+        message.chat.id,
+        '__Processing Photo: Converting to PNG...__',
+        reply_markup=ReplyKeyboardRemove(),
+        reply_to_message_id=message.id
+    )
+    # نشغل الدالة الجديدة مباشرة
+    conv_thread = threading.Thread(target=lambda: process_photo_to_png(message, processing_msg), daemon=True)
+    conv_thread.start()
 
 
 # sticker
