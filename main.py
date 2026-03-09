@@ -83,7 +83,7 @@ def follow(message,inputt,new,old,oldmessage):
         print("It is IMG option")
         file = app.download_media(message)
         
-        # استخدام مكتبة Pillow بدلاً من magickcommand لتفادي الخطأ "convert: not found"
+        # استخدام مكتبة Pillow بدلاً من magickcommand
         try:
             with Image.open(file) as img:
                 # التأكد من التوافق عند التحويل إلى PNG
@@ -98,9 +98,10 @@ def follow(message,inputt,new,old,oldmessage):
             os.system(cmd)
             conlink = helperfunctions.imageinfo(output)
 
+        # التعديل تم هنا لإرسالها كصورة (Photo) وليس כמستند (Document)
         if os.path.exists(output) and os.path.getsize(output) > 0:
-            app.send_chat_action(message.chat.id, enums.ChatAction.UPLOAD_DOCUMENT)
-            app.send_document(message.chat.id,document=output, force_document=True, caption=f'**Converted File** : __{output}__', reply_to_message_id=message.id)
+            app.send_chat_action(message.chat.id, enums.ChatAction.UPLOAD_PHOTO)
+            app.send_photo(message.chat.id, photo=output, caption=f'**Converted File** : __{output}__', reply_to_message_id=message.id)
         else:
             app.send_message(message.chat.id,"__Error while Conversion__", reply_to_message_id=message.id)
 
