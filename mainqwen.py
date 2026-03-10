@@ -368,26 +368,29 @@ def follow(message, inputt, new, old, oldmessage):
             # programs
             elif output.upper().endswith(PRO) and inputt.upper().endswith(PRO):
                 flag = 0
+                lang = ""
                 if ((old.upper() == "C") and (new.upper() == "GO")):
                     flag = 1
-                elif ((old.upper() == "PY") and (new.upper() in ['CPP', 'RS', 'JL', 'KT', 'NIM', 'DART', 'GO'])):
+                elif ((old.upper() == "PY") and (new.upper() in ['CPP','RS','JL','KT','NIM','DART','GO'])):
                     flag = 2
-                extens = ['CPP', 'RS', 'JL', 'KT', 'NIM', 'DART', 'GO']
-                langs = ['cpp', 'rust', 'julia', 'kotlin', 'nim', 'dart', 'go']
-                for i in range(len(langs)):
-                    if new.upper() == extens[i]:
-                        lang = langs[i]
-            elif ((old.upper() == "JAVA") and (new.upper() in ["JS", "TS"])):
+                    extens = ['CPP','RS','JL','KT','NIM','DART','GO']
+                    langs = ['cpp','rust','julia','kotlin','nim','dart','go']
+                    for i in range(len(langs)):
+                        if new.upper() == extens[i]:
+                            lang = langs[i]
+                elif ((old.upper() == "JAVA") and (new.upper() in ["JS","TS"])):
                     flag = 3
                     lang = new.upper()
+                
                 if not flag:
-                    safe_app_call(app.send_message, message.chat.id,
-                                  f"__**{old.upper()}** to **{new.upper()}** is not Supported.__",
-                                  reply_to_message_id=message.id)
+                    app.send_message(message.chat.id,
+                                     f"__**{old.upper()}** to **{new.upper()}** is not Supported.\n\n**Supported Formats:**\nC -> GO\nPY -> CPP, RS, JL, KT, NIM, DART & GO\nJAVA -> JS & TS__",
+                                     reply_to_message_id=message.id)
                 else:
                     print("It is Programs option")
                     file = app.download_media(message)
-                    if not file: return
+                    if not file:
+                        return
                     if flag == 1:
                         output = progconv.c2Go(file)
                     elif flag == 2:
@@ -403,19 +406,17 @@ def follow(message, inputt, new, old, oldmessage):
                             errormessage = ""
                             for ele in info[1]:
                                 errormessage = errormessage + ele + "\n"
-                    if os.path.exists(file):
-                        os.remove(file)
+                    os.remove(file)
                     if os.path.exists(output) and os.path.getsize(output) > 0:
-                        safe_app_call(app.send_chat_action, message.chat.id, enums.ChatAction.UPLOAD_DOCUMENT)
-                        safe_app_call(app.send_document, message.chat.id, document=output, force_document=True,
-                                      reply_to_message_id=message.id)
+                        app.send_chat_action(message.chat.id, enums.ChatAction.UPLOAD_DOCUMENT)
+                        app.send_document(message.chat.id, document=output, force_document=True,
+                                          reply_to_message_id=message.id)
                     else:
                         if flag != 3:
                             errormessage = "Error while Conversion"
-                        safe_app_call(app.send_message, message.chat.id, f"__{errormessage}__", reply_to_message_id=message.id)
+                        app.send_message(message.chat.id, f"__{errormessage}__", reply_to_message_id=message.id)
                     if os.path.exists(output):
                         os.remove(output)
-
             # 3D files
             elif output.upper().endswith(T3D) and inputt.upper().endswith(T3D):
                 if (old.upper() == "WRL"):
