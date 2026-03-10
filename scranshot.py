@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 import queue
+import random  # تمت إضافة مكتبة العشوائية لتفاوت الثواني
 # مكتبة بايثون للصور بديلة لـ imagemagick
 from PIL import Image
 from buttons import *
@@ -226,11 +227,25 @@ def execute_screenshots(file, count, status_msg, user_id, chat_id):
                 duration = 60.0
         
         images = []
-        interval = duration / (count + 1)
         
-        for i in range(1, count + 1):
-            timestamp = interval * i
-            out_img = f"ss_{user_id}_{i}.jpg"
+        # قائمة الثواني المتفاوتة التي تم طلبها لاختيار الفواصل العشوائية
+        step_choices = [2, 5, 8, 10, 15, 20, 17]
+        
+        # إنشاء سلسلة زمنية خام باستخدام القفزات المتفاوتة والعشوائية
+        raw_timeline = []
+        current_sum = 0
+        for _ in range(count):
+            current_sum += random.choice(step_choices)
+            raw_timeline.append(current_sum)
+            
+        # ضبط الفواصل الزمنية لتغطي مساحة الفيديو (تجنب الوصول لآخر ثانية بالضبط حتى لا تكون شاشة سوداء)
+        scale_factor = (duration * 0.95) / raw_timeline[-1] if raw_timeline[-1] > 0 else 1
+        
+        for i, raw_time in enumerate(raw_timeline):
+            # تحديد الوقت الدقيق والمتفاوت لهذه اللقطة
+            timestamp = raw_time * scale_factor
+            out_img = f"ss_{user_id}_{i+1}.jpg"
+            
             # استخدام -q:v 1 يعطي أعلى دقة وجودة لملف الصورة JPEG شبه معدومة الضغط
             cmd = f'ffmpeg -y -ss {timestamp} -i "{file}" -vframes 1 -q:v 1 "{out_img}"'
             os.system(cmd)
@@ -252,7 +267,7 @@ def execute_screenshots(file, count, status_msg, user_id, chat_id):
 
         markup = InlineKeyboardMarkup([[InlineKeyboardButton("📤 رفع اللقطات تلقائياً في ألبومات متتالية", callback_data="UPLOAD_SS")]])
         safe_app_call(app.edit_message_text, status_msg.chat.id, status_msg.id, 
-                      f"✅ __تم الانتهاء بنجاح!__\n\nتم استخراج **{len(images)}** لقطات بدقة عالية.\n__اضغط على الزر بالأسفل للبدء بالرفع كألبومات.__", 
+                      f"✅ __تم الانتهاء بنجاح!__\n\nتم استخراج **{len(images)}** لقطات متباعدة بتفاوت عشوائي وبدقة فائقة.\n__اضغط على الزر بالأسفل للبدء بالرفع كألبومات.__", 
                       reply_markup=markup)
 
     except Exception as e:
@@ -266,13 +281,13 @@ def upload_screenshots(chat_id, user_id, user_data, msg):
     if not images: return
     
     try:
-        safe_app_call(app.edit_message_text, chat_id, msg.id, f"⏳ __جاري تقسيم الصور إلى ألبومات ورفعها (إجمالي {len(images)} صور)...__")
+        safe_app_call(app.edit_message_text, chat_id, msg.id, f"⏳ __جاري تقسيم الصور إلى ألبومات ورفعها (إجمالي {len(images)} صورة)...__")
         
         # تقسيم الصور لـ دفعات (أقصى حد للألبوم في تليجرام هو 10 صور)
         media_chunks = [images[i:i + 10] for i in range(0, len(images), 10)]
         
         for index, chunk in enumerate(media_chunks):
-            # تليجرام لا يقبل media_group تحتوي على ملف واحد فقط، فلو صادفنا ملف واحد بالدفعة نرفعه كصورة عادية
+            # تليجرام لا يقبل media_group تحتوي على ملف واحد فقط
             if len(chunk) == 1:
                 safe_app_call(app.send_photo, chat_id, photo=chunk[0])
             else:
@@ -283,7 +298,7 @@ def upload_screenshots(chat_id, user_id, user_data, msg):
                     time.sleep(e.value)
                     safe_app_call(app.send_media_group, chat_id, media=media_group)
             
-            # فاصل زمني لتجنب باند التليجرام أو ضغط الخوادم
+            # فاصل زمني بسيط لتجنب توقف بوتك (FloodWait)
             time.sleep(2.5)
 
         safe_app_call(app.delete_messages, chat_id, msg.id)
@@ -1392,7 +1407,7 @@ def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_me
         SS_STATES[user_id]["state"] = "PROCESSING"
         file = SS_STATES[user_id]["video_file"]
         
-        msg = safe_app_call(app.send_message, message.chat.id, f"⏳ __جاري استخراج {count} لقطات متعددة بدقة، الرجاء الانتظار قليلاً...__", reply_to_message_id=message.id)
+        msg = safe_app_call(app.send_message, message.chat.id, f"⏳ __جاري استخراج {count} لقطات عشوائية متباعدة بدقة عالية جداً، يرجى الانتظار...__", reply_to_message_id=message.id)
         
         # بدء عملية اللقطات بالخلفية عبر Thread
         ss_thread = threading.Thread(target=lambda: execute_screenshots(file, count, msg, user_id, message.chat.id), daemon=True)
@@ -1547,5 +1562,5 @@ def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_me
 
 # --- تشغيل البوت ---
 if __name__ == "__main__":
-    print("Bot Started with FloodWait Protection & Semaphore & Auto High-Res Screenshots in Multiple Albums Support")
+    print("Bot Started with Random Steps & Multi-Albums Screenshots Support")
     app.run()
