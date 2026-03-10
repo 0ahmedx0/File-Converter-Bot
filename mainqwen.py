@@ -377,7 +377,7 @@ def follow(message, inputt, new, old, oldmessage):
                 for i in range(len(langs)):
                     if new.upper() == extens[i]:
                         lang = langs[i]
-                    elif ((old.upper() == "JAVA") and (new.upper() in ["JS", "TS"])):
+            elif ((old.upper() == "JAVA") and (new.upper() in ["JS", "TS"])):
                     flag = 3
                     lang = new.upper()
                 if not flag:
