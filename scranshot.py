@@ -67,7 +67,6 @@ def safe_app_call(func, *args, max_retries=3, **kwargs):
             return None
         except Exception as e:
             print(f"❌ Error in safe_app_call: {e}")
-            # لا نعيد المح المحاولة للأخطاء الأخرى لتجنب الحلقات اللانهائية
             return None
     return None
 
@@ -98,7 +97,7 @@ def down(message):
     except FloodWait as e:
         print(f"⚠️ Download FloodWait: {e.value}s")
         time.sleep(e.value)
-        return down(message) # إعادة المحاولة
+        return down(message)
     except Exception as e:
         print(f"❌ Download Error: {e}")
         return None, None
@@ -187,7 +186,7 @@ def downstatus(statusfile, message):
         except:
             time.sleep(5)
 
-# --- دوال لقطات الشاشة والألبوم (جديد) ---
+# --- دوال لقطات الشاشة والألبوم ---
 def get_video_duration(filepath):
     try:
         cmd = f'ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "{filepath}"'
@@ -207,7 +206,7 @@ def download_and_ask_video(message, msg):
     SS_STATES[user_id] = {"video_file": file, "video_msg": message, "state": "WAITING_BTN"}
     
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📸 استخراج لقطات شاشة (متعددة من الفيديو)", callback_data="ASK_SS")],
+        [InlineKeyboardButton("📸 استخراج لقطات شاشة بدقة عالية جداً", callback_data="ASK_SS")],
         [InlineKeyboardButton("🎥 الإرسال كبث عادي (Stream)", callback_data="DO_STREAM_FILE")]
     ])
     
@@ -224,23 +223,22 @@ def execute_screenshots(file, count, status_msg, user_id, chat_id):
                 _, dur, _, _ = mediainfo.allinfo(file)
                 duration = float(dur)
             except:
-                duration = 60.0 # كقيمة افتراضية للطوارئ
+                duration = 60.0
         
         images = []
-        # توزيع التقاطات الشاشة بالتساوي مع إعطاء مسافات مبدئية ونهائية متزنة (لكي لا تكون من البداية فقط)
         interval = duration / (count + 1)
         
         for i in range(1, count + 1):
             timestamp = interval * i
             out_img = f"ss_{user_id}_{i}.jpg"
-            # استخدام الأمر بصيغة -ss في البداية لتخطي وقت الفيديو بشكل أسرع (fast seek)
-            cmd = f'ffmpeg -y -ss {timestamp} -i "{file}" -vframes 1 -q:v 2 "{out_img}"'
+            # استخدام -q:v 1 يعطي أعلى دقة وجودة لملف الصورة JPEG شبه معدومة الضغط
+            cmd = f'ffmpeg -y -ss {timestamp} -i "{file}" -vframes 1 -q:v 1 "{out_img}"'
             os.system(cmd)
             
             if os.path.exists(out_img) and os.path.getsize(out_img) > 0:
                 images.append(out_img)
 
-        # مسح فيديو المصدر فور الانتهاء من أخذ الصور
+        # مسح فيديو المصدر فور الانتهاء
         if os.path.exists(file):
             os.remove(file) 
 
@@ -252,9 +250,9 @@ def execute_screenshots(file, count, status_msg, user_id, chat_id):
         SS_STATES[user_id]["images"] = images
         SS_STATES[user_id]["state"] = "READY_TO_UPLOAD"
 
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("📤 رفع جميع اللقطات كألبوم تلقائي", callback_data="UPLOAD_SS")]])
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("📤 رفع اللقطات تلقائياً في ألبومات متتالية", callback_data="UPLOAD_SS")]])
         safe_app_call(app.edit_message_text, status_msg.chat.id, status_msg.id, 
-                      f"✅ __تم الانتهاء!__\n\nلقد قمت باستخراج **{len(images)}** لقطات متفرقة من جميع أجزاء الفيديو بنجاح.\n__انقر على الزر بالأسفل لرفع الصور.__", 
+                      f"✅ __تم الانتهاء بنجاح!__\n\nتم استخراج **{len(images)}** لقطات بدقة عالية.\n__اضغط على الزر بالأسفل للبدء بالرفع كألبومات.__", 
                       reply_markup=markup)
 
     except Exception as e:
@@ -268,17 +266,31 @@ def upload_screenshots(chat_id, user_id, user_data, msg):
     if not images: return
     
     try:
-        safe_app_call(app.edit_message_text, chat_id, msg.id, "⏳ __جاري تحضير ورفع الألبوم، يرجى الانتظار...__")
-        media_group = [InputMediaPhoto(img) for img in images]
-        safe_app_call(app.send_media_group, chat_id, media=media_group)
+        safe_app_call(app.edit_message_text, chat_id, msg.id, f"⏳ __جاري تقسيم الصور إلى ألبومات ورفعها (إجمالي {len(images)} صور)...__")
+        
+        # تقسيم الصور لـ دفعات (أقصى حد للألبوم في تليجرام هو 10 صور)
+        media_chunks = [images[i:i + 10] for i in range(0, len(images), 10)]
+        
+        for index, chunk in enumerate(media_chunks):
+            # تليجرام لا يقبل media_group تحتوي على ملف واحد فقط، فلو صادفنا ملف واحد بالدفعة نرفعه كصورة عادية
+            if len(chunk) == 1:
+                safe_app_call(app.send_photo, chat_id, photo=chunk[0])
+            else:
+                media_group = [InputMediaPhoto(img) for img in chunk]
+                try:
+                    safe_app_call(app.send_media_group, chat_id, media=media_group)
+                except FloodWait as e:
+                    time.sleep(e.value)
+                    safe_app_call(app.send_media_group, chat_id, media=media_group)
+            
+            # فاصل زمني لتجنب باند التليجرام أو ضغط الخوادم
+            time.sleep(2.5)
+
         safe_app_call(app.delete_messages, chat_id, msg.id)
-    except FloodWait as e:
-        time.sleep(e.value)
-        safe_app_call(app.send_media_group, chat_id, media=media_group)
-        safe_app_call(app.delete_messages, chat_id, msg.id)
+        
     except Exception as e:
         print(f"Album upload error: {e}")
-        # احتياطياً في حال تعذر الإرسال كألبوم واحد لأي سبب
+        # احتياطياً في حال تعذر الرفع المجمع 
         for img in images:
             safe_app_call(app.send_photo, chat_id, photo=img)
             time.sleep(1)
@@ -286,20 +298,18 @@ def upload_screenshots(chat_id, user_id, user_data, msg):
             safe_app_call(app.delete_messages, chat_id, msg.id)
         except: pass
     finally:
-        # مسح جميع الملفات المؤقتة لتنظيف الذاكرة بشكل نهائي
+        # التنظيف الكامل للذاكرة من ملفات الصور
         for img in images:
             if os.path.exists(img):
                 os.remove(img)
-        # مسح البيانات من الحالة
+        # إنهاء جلسة العضو
         SS_STATES.pop(user_id, None)
 
 
 # --- الدالة الرئيسية للمعالجة (مع Semaphore) ---
 def follow(message, inputt, new, old, oldmessage):
-    # استخدام Semaphore للتحكم في عدد العمليات المتزامنة
     with task_semaphore:
         output = helperfunctions.updtname(inputt, new)
-        
         try:
             # ffmpeg videos audios
             if (output.upper().endswith(VIDAUD) or new == "gif") and inputt.upper().endswith(VIDAUD):
@@ -327,7 +337,7 @@ def follow(message, inputt, new, old, oldmessage):
                 if os.path.exists(output):
                     os.remove(output)
 
-            # images (معالجة محسنة باستخدام Pillow فقط لتجنب identify: not found)
+            # images 
             elif output.upper().endswith(IMG) and inputt.upper().endswith(IMG):
                 print("It is IMG option")
                 file = None
@@ -337,9 +347,7 @@ def follow(message, inputt, new, old, oldmessage):
                         safe_app_call(app.send_message, message.chat.id, "__Error: File download failed__", reply_to_message_id=message.id)
                         return
 
-                    # استخدام Pillow فقط وتجنب ImageMagick
                     with Image.open(file) as img:
-                        # التأكد من التوافق عند التحويل إلى PNG
                         if img.mode in ("RGBA", "P"):
                             img = img.convert("RGBA")
                         else:
@@ -552,7 +560,6 @@ def follow(message, inputt, new, old, oldmessage):
             else:
                 safe_app_call(app.send_message, message.chat.id, "__Choose a Valid Extension, don't Type it__", reply_to_message_id=message.id)
 
-            # حذف الرسالة القديمة
             try:
                 safe_app_call(app.delete_messages, message.chat.id, message_ids=oldmessage.id)
             except:
@@ -562,7 +569,7 @@ def follow(message, inputt, new, old, oldmessage):
             print(f"❌ Critical Error in follow: {e}")
             safe_app_call(app.send_message, message.chat.id, f"__Critical Error: {str(e)}__", reply_to_message_id=message.id)
 
-# --- باقي الدوال (مع إضافة حماية FloodWait) ---
+# --- باقي الدوال ---
 def negetivetopostive(message, oldmessage):
     file = app.download_media(message)
     output = file.split("/")[-1]
@@ -575,7 +582,6 @@ def negetivetopostive(message, oldmessage):
     except: pass
     try:
         print("using simple tool")
-        # aifunctions.positiver(file,output) # تأكد من وجود المكتبة
         safe_app_call(app.send_document, message.chat.id, document=output, force_document=True,
                       caption="used tool -> **openCV**", reply_to_message_id=message.id)
         os.remove(output)
@@ -594,13 +600,11 @@ def colorizeimage(message, oldmessage):
     file = app.download_media(message)
     output = file.split("/")[-1]
     try:
-        # aifunctions.deoldify(file,output)
         safe_app_call(app.send_document, message.chat.id, document=output, force_document=True,
                       caption="used tool -> **Deoldify**", reply_to_message_id=message.id)
         os.remove(output)
     except: pass
     try:
-        # aifunctions.colorize_image(output,file)
         safe_app_call(app.send_document, message.chat.id, document=output, force_document=True,
                       caption="used tool -> **Local Model**", reply_to_message_id=message.id)
         os.remove(output)
@@ -610,40 +614,18 @@ def colorizeimage(message, oldmessage):
 
 def genrateimages(message, prompt, msg):
     try:
-        # filelist = aifunctions.dallemini(prompt)
-        # safe_app_call(app.send_message, message.chat.id, "**DALLE MINI**", reply_to_message_id=message.id)
-        # for ele in filelist:
-        #     safe_app_call(app.send_document, message.chat.id, document=ele, force_document=True)
-        #     os.remove(ele)
-        # os.rmdir(prompt)
-        
-        # filelist = aifunctions.stabilityAI(prompt)
-        # safe_app_call(app.send_message, message.chat.id, "**STABLE DIFFUSION**", reply_to_message_id=message.id)
-        # for ele in filelist:
-        #     safe_app_call(app.send_document, message.chat.id, document=ele, force_document=True)
-        #     os.remove(ele)
         safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
     except Exception as e:
         print(f"AI Image Gen Error: {e}")
 
 def genratemusic(message, prompt, msg):
     try:
-        # musicfile, thumbfile = aifunctions.riffusion(prompt)
-        # safe_app_call(app.send_audio, message.chat.id, musicfile, duration=10, performer="Riffusion", title=prompt, thumb=thumbfile, reply_to_message_id=message.id)
-        # os.remove(musicfile)
-        # os.remove(thumbfile)
         safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
     except Exception as e:
         print(f"AI Music Gen Error: {e}")
 
 def genratevideos(message, prompt):
     try:
-        # hash, queuepos = aifunctions.cogvideo(prompt, AutoCall=False)
-        # msg = safe_app_call(app.send_message, message.chat.id, f"**Prompt received and Request is sent. Expected waiting time is {(queuepos+1)*3} mins**", reply_to_message_id=message.id)
-        # file = aifunctions.cogvideostatus(hash, prompt)
-        # safe_app_call(app.send_video, message.chat.id, video=file, reply_to_message_id=message.id)
-        # os.remove(file)
-        # safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
         pass
     except Exception as e:
         print(f"AI Video Gen Error: {e}")
@@ -698,7 +680,6 @@ def send_local_video(original_message, local_video_path, processing_msg):
     finally:
         if os.path.exists(local_video_path):
             os.remove(local_video_path)
-        # thumb cleanup handled in up()
 
 def sendvideo(message, oldmessage):
     file, msg = down(message)
@@ -842,9 +823,6 @@ def runpro(message, oldm):
 def bgremove(message, oldm):
     file = app.download_media(message)
     if not file: return
-    # ofile = aifunctions.bg_remove(file)
-    # safe_app_call(app.send_document, message.chat.id, ofile, reply_to_message_id=message.id)
-    # os.remove(ofile)
     os.remove(file)
     safe_app_call(app.delete_messages, message.chat.id, message_ids=oldm.id)
 
@@ -883,31 +861,19 @@ def transcript(message, oldmessage):
     output = helperfunctions.updtname(inputt, "wav")
     temp = helperfunctions.updtname(inputt, "txt")
     if file.endswith("wav"):
-        # aifunctions.splitfn(file, message, temp)
         pass
     else:
         cmd = helperfunctions.ffmpegcommand(file, output, "wav")
         os.system(cmd)
-        # aifunctions.splitfn(output, message, temp)
         os.remove(output)
     if os.path.getsize(temp) > 0:
         safe_app_call(app.send_document, message.chat.id, document=temp, caption="**Google Engine**", reply_to_message_id=message.id)
         os.remove(temp)
-    # data = aifunctions.whisper(file)
-    # if data is not None:
-    #     with open(temp, "w") as wfile:
-    #         wfile.write(data)
-    #     if os.path.getsize(temp) > 0:
-    #         safe_app_call(app.send_document, message.chat.id, document=temp, caption="**OpenAI Engine** __(whisper)__", reply_to_message_id=message.id)
-    #         os.remove(temp)
     safe_app_call(app.delete_messages, message.chat.id, message_ids=oldmessage.id)
     os.remove(file)
 
 def textTo3d(prompt, message, msg):
     try:
-        # htmlfile = aifunctions.pointE(prompt)
-        # safe_app_call(app.send_document, message.chat.id, htmlfile, reply_to_message_id=message.id)
-        # os.remove(htmlfile)
         safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
     except Exception as e:
         print(f"3D Gen Error: {e}")
@@ -917,7 +883,6 @@ def speak(message, oldmessage):
     if not file: return
     inputt = file.split("/")[-1]
     output = helperfunctions.updtname(inputt, "mp3")
-    # aifunctions.texttospeech(file, output)
     os.remove(file)
     safe_app_call(app.send_document, message.chat.id, document=output, reply_to_message_id=message.id)
     safe_app_call(app.delete_messages, message.chat.id, message_ids=oldmessage.id)
@@ -928,7 +893,6 @@ def increaseres(message, oldmessage):
     if not file: return
     inputt = file.split("/")[-1]
     try:
-        # aifunctions.upscale(file, inputt)
         os.remove(file)
         safe_app_call(app.send_document, message.chat.id, document=inputt, reply_to_message_id=message.id)
     except Exception as e:
@@ -959,14 +923,8 @@ def handleAIChat(message):
     hash = str(message.chat.id)
     if hash[0] == "-": hash = str(hash)[1:]
     safe_app_call(app.send_chat_action, message.chat.id, enums.ChatAction.TYPING)
-    # reply = aifunctions.chatWithAI(message.text, hash)
-    # if reply != None: safe_app_call(app.send_message, message.chat.id, reply, reply_to_message_id=message.id)
-    # else: safe_app_call(app.send_chat_action, message.chat.id, enums.ChatAction.CANCEL)
-    pass
 
 def handelbloom(para, message, msg):
-    # ans = aifunctions.bloom(para)
-    # if ans is not None: safe_app_call(app.send_message, message.chat.id, f'__{ans}__', reply_to_message_id=message.id)
     safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
 
 def other(message):
@@ -1182,7 +1140,7 @@ def inbtwn(client: pyrogram.client.Client, call: pyrogram.types.CallbackQuery):
         if user_data:
             SS_STATES[call.from_user.id]["state"] = "WAITING_COUNT"
             safe_app_call(app.edit_message_text, call.message.chat.id, call.message.id, 
-                          "💬 **أرسل الآن كم عدد اللقطات التي تريد استخراجها من هذا الفيديو؟**\n__(الرجاء إرسال رقم صحيح بين 1 و 10 لأن تليجرام يحد الألبوم بـ 10 صور كحد أقصى)__")
+                          "💬 **أرسل الآن كم عدد اللقطات التي تريد استخراجها من هذا الفيديو؟**\n__(الرجاء إرسال رقم صحيح بين 1 و 100 وسيتم إرسالها مقسمة في ألبومات متتالية)__")
             
     elif call.data == "UPLOAD_SS":
         user_data = SS_STATES.get(call.from_user.id)
@@ -1355,7 +1313,6 @@ def process_animation_to_video(message, processing_msg):
 
 @app.on_message(filters.video)
 def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    # حفظنا رسالة الفيديو وإظهار الخيارات الجديدة بعد تنزيل الفيديو تلقائياً أولاً للسرعة 
     saveMsg(message, "VIDEO")
     oldm = safe_app_call(app.send_message, message.chat.id, '⏳ __جاري تحميل الفيديو، يرجى الانتظار لتلقي الخيارات...__\n__Downloading...__', reply_to_message_id=message.id)
     if oldm:
@@ -1423,8 +1380,9 @@ def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_me
     if user_id in SS_STATES and SS_STATES[user_id].get("state") == "WAITING_COUNT":
         try:
             count = int(message.text.strip())
-            if count < 1 or count > 10:
-                safe_app_call(app.send_message, message.chat.id, "❌ __الرجاء إدخال رقم بين 1 و 10 فقط (لتجنب تجاوز حد صور الألبوم في تليجرام).__", reply_to_message_id=message.id)
+            # تغيير الحد الأقصى هنا إلى 100
+            if count < 1 or count > 100:
+                safe_app_call(app.send_message, message.chat.id, "❌ __الرجاء إدخال رقم بين 1 و 100 فقط.__", reply_to_message_id=message.id)
                 return
         except ValueError:
             safe_app_call(app.send_message, message.chat.id, "❌ __الرجاء إرسال رقم صحيح وليس نصوصاً.__", reply_to_message_id=message.id)
@@ -1441,7 +1399,7 @@ def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_me
         ss_thread.start()
         return
 
-    # المسار الطبيعي لباقي الأوامر لو لم يكن المستخدم ينتظر طلب लقطات الشاشة
+    # المسار الطبيعي لباقي الأوامر
     if "https://t.me/" in message.text:
         mf = threading.Thread(target=lambda: saverec(message), daemon=True)
         mf.start()
@@ -1589,5 +1547,5 @@ def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_me
 
 # --- تشغيل البوت ---
 if __name__ == "__main__":
-    print("Bot Started with FloodWait Protection & Semaphore & Screenshots Support")
+    print("Bot Started with FloodWait Protection & Semaphore & Auto High-Res Screenshots in Multiple Albums Support")
     app.run()
