@@ -270,18 +270,24 @@ def upload_screenshots(chat_id, prompt_msg_id, user_data, msg):
     images = user_data.get("images", [])
     if not images: return
     
+    # جلب الرسالة الأصلية للفيديو لعمل Reply (رد) عليها
+    original_msg = user_data.get("video_msg")
+    original_msg_id = original_msg.id if original_msg else None
+    
     try:
         media_chunks = [images[i:i + 10] for i in range(0, len(images), 10)]
         for index, chunk in enumerate(media_chunks):
+            # إذا كان الجزء يحتوي على صورة واحدة فقط
             if len(chunk) == 1:
-                safe_app_call(app.send_photo, chat_id, photo=chunk[0])
+                safe_app_call(app.send_photo, chat_id, photo=chunk[0], reply_to_message_id=original_msg_id)
             else:
+                # إذا كان الجزء يحتوي على أكثر من صورة (ألبوم)
                 media_group = [InputMediaPhoto(img) for img in chunk]
                 try:
-                    safe_app_call(app.send_media_group, chat_id, media=media_group)
+                    safe_app_call(app.send_media_group, chat_id, media=media_group, reply_to_message_id=original_msg_id)
                 except FloodWait as e:
                     time.sleep(e.value)
-                    safe_app_call(app.send_media_group, chat_id, media=media_group)
+                    safe_app_call(app.send_media_group, chat_id, media=media_group, reply_to_message_id=original_msg_id)
             
             time.sleep(2.5)
 
@@ -289,8 +295,9 @@ def upload_screenshots(chat_id, prompt_msg_id, user_data, msg):
         
     except Exception as e:
         print(f"Album upload error: {e}")
+        # الرفع الاحتياطي في حال فشل الألبوم
         for img in images:
-            safe_app_call(app.send_photo, chat_id, photo=img)
+            safe_app_call(app.send_photo, chat_id, photo=img, reply_to_message_id=original_msg_id)
             time.sleep(1)
         try: safe_app_call(app.delete_messages, chat_id, msg.id)
         except: pass
@@ -299,7 +306,6 @@ def upload_screenshots(chat_id, prompt_msg_id, user_data, msg):
             if os.path.exists(img):
                 os.remove(img)
         SS_STATES.pop(prompt_msg_id, None)
-
 
 # --- الدالة الرئيسية للمعالجة القديمة الخاصة بالبوت ---
 def follow(message, inputt, new, old, oldmessage):
