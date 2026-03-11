@@ -1049,11 +1049,13 @@ def bloomcmd(client: pyrogram.client.Client, message: pyrogram.types.messages_an
 # --- قسم الأزرار المحدث بالكامل للقطات والفيديوهات ---
 @app.on_callback_query()
 def inbtwn(client: pyrogram.client.Client, call: pyrogram.types.CallbackQuery):
+    # ألعاب التيك تاك تو والتخمين
     if call.data[:4] == "TTT ":
         return tictactoe.TTTgame(app, call, call.message)
     elif call.data[:2] == "G ":
         return guess.Ggame(app, call)
         
+    # خيار إرسال الفيديو كبث (Stream)
     elif call.data == "DO_STREAM_FILE":
         prompt_msg_id = call.message.id
         user_data = SS_STATES.get(prompt_msg_id)
@@ -1066,33 +1068,51 @@ def inbtwn(client: pyrogram.client.Client, call: pyrogram.types.CallbackQuery):
                 os.remove(file)
             SS_STATES.pop(prompt_msg_id, None)
 
+    # خيار طلب استخراج لقطات شاشة (إظهار الأرقام)
     elif call.data == "ASK_SS":
         prompt_msg_id = call.message.id
         if prompt_msg_id in SS_STATES:
+            # القائمة تبدأ بـ 5 ثم العشرات حتى 100
+            num_list = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
             buttons = []
             row = []
-            for i in range(10, 101, 10):
+            
+            for i in num_list:
                 row.append(InlineKeyboardButton(f"🖼️ {i}", callback_data=f"SS_NUM_{i}"))
-                if len(row) == 5:
+                # نضع 4 أزرار في كل صف ليكون الشكل متناسقاً
+                if len(row) == 4:
                     buttons.append(row)
                     row = []
+            
+            # إضافة أي أزرار متبقية في القائمة
+            if row:
+                buttons.append(row)
+                
             markup = InlineKeyboardMarkup(buttons)
             safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, 
-                          "💬 **كم عدد اللقطات التي تريد استخراجها من هذا الفيديو؟**\n__(اختر من الأزرار بالأسفل وسيتم الرفع تلقائيا كألبومات متتالية)__",
+                          "💬 **كم عدد اللقطات التي تريد استخراجها من هذا الفيديو؟**\n__(اختر من الأزرار بالأسفل وسيتم الرفع تلقائياً كألبومات متتالية)__",
                           reply_markup=markup)
             
+    # معالجة الضغط على رقم معين
     elif call.data.startswith("SS_NUM_"):
+        # استخراج الرقم من الكول باك داتا
         count = int(call.data.split("_")[2]) 
         prompt_msg_id = call.message.id
         user_data = SS_STATES.get(prompt_msg_id)
+        
         if user_data and "video_file" in user_data:
             safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, f"⏳ __جاري استخراج {count} لقطات بدقة...__")
             file = user_data["video_file"]
-            ss_thread = threading.Thread(target=lambda: execute_screenshots(file, count, call.message, prompt_msg_id, call.from_user.id, call.message.chat.id), daemon=True)
+            # بدء عملية القص في Thread منفصل
+            ss_thread = threading.Thread(
+                target=lambda: execute_screenshots(
+                    file, count, call.message, prompt_msg_id, call.from_user.id, call.message.chat.id
+                ), 
+                daemon=True
+            )
             ss_thread.start()
         else:
             safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, "❌ __عذراً، انتهت صلاحية هذا الملف، حاول من جديد.__")
-
 # --- باقي معالجات الرسائل والوسائط الخاصة بك ---
 @app.on_message(filters.document)
 def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
