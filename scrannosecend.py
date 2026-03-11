@@ -13,7 +13,6 @@ import queue
 # مكتبة بايثون للصور بديلة لـ imagemagick
 from PIL import Image
 from buttons import *
-# import aifunctions (تأكد من وجود هذا الملف إذا كنت تستخدم ميزات الذكاء الاصطناعي)
 import helperfunctions
 import mediainfo
 import guess
@@ -28,7 +27,6 @@ api_hash = os.environ.get("HASH", "")
 api_id = os.environ.get("ID", "")
 
 # --- إعدادات الحماية من الحظر (Flood Protection) ---
-# يسمح بتنفيذ 3 عمليات فقط في نفس الوقت لتجنب الضغط على سيرفرات تليجرام
 MAX_CONCURRENT_TASKS = 3
 task_semaphore = threading.Semaphore(MAX_CONCURRENT_TASKS)
 
@@ -36,10 +34,10 @@ task_semaphore = threading.Semaphore(MAX_CONCURRENT_TASKS)
 app = Client("my_bot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 MESGS = {}
 
-# حالة طلبات لقطات الفيديو 
-# يتم حفظ الحالة بناءً على الـ Message ID (رقم رسالة البوت التي تحوي الأزرار) بدلاً من المستخدم
-# لتتمكن من رفع والتعامل مع عدة فيديوهات في نفس الوقت بدون أن تحذف بعضها
+# تتبع الفيديوهات برقم الرسالة بدلا من المستخدم لمنع التداخل
 SS_STATES = {}
+# تتبع طباعة سطر الأوامر لمنع الضغط والتكرار المزعج
+PROGRESS_TRACKER = {}
 
 # --- دوال مساعدة لإدارة الرسائل ---
 def saveMsg(msg, msg_type):
@@ -53,9 +51,6 @@ def removeSavedMsg(msg):
 
 # --- دالة الأمان للاتصال بتليجرام (Safe Call Wrapper) ---
 def safe_app_call(func, *args, max_retries=3, **kwargs):
-    """
-    دالة تغليف لاستدعاء دوال تليجرام مع معالجة تلقائية لخطأ الانتظار FloodWait
-    """
     attempt = 0
     while attempt < max_retries:
         try:
@@ -73,24 +68,13 @@ def safe_app_call(func, *args, max_retries=3, **kwargs):
             return None
     return None
 
-# --- دوال التنزيل والرفع الآمنة ---
+# --- دوال التنزيل والرفع ومراقبة التقدم المعدلة ---
 def down(message):
-    try:
-        size = int(message.document.file_size)
-    except:
-        try:
-            size = int(message.video.file_size)
-        except:
-            size = 1
-    
-    msg = None
-    if size > 25000000:
-        msg = safe_app_call(app.send_message, message.chat.id, '__Downloading__', reply_to_message_id=message.id)
-        if msg:
-            dosta = threading.Thread(target=lambda: downstatus(f'{message.id}downstatus.txt', msg), daemon=True)
-            dosta.start()
-    else:
-        msg = None
+    # اظهار رسالة التنزيل دائماً مهما كان حجم الملف
+    msg = safe_app_call(app.send_message, message.chat.id, '📥 __جاري بدء التحميل... 0%__', reply_to_message_id=message.id)
+    if msg:
+        dosta = threading.Thread(target=lambda: downstatus(f'{message.id}downstatus.txt', msg), daemon=True)
+        dosta.start()
     
     try:
         file = app.download_media(message, progress=dprogress, progress_args=[message])
@@ -108,13 +92,13 @@ def down(message):
 def up(message, file, msg, video=False, capt="", thumb=None, duration=0, widht=0, height=0, multi=False):
     if msg is not None:
         try:
-            safe_app_call(app.edit_message_text, message.chat.id, msg.id, '__Uploading__')
+            safe_app_call(app.edit_message_text, message.chat.id, msg.id, '📤 __جاري بدء الرفع... 0%__')
         except:
             pass
     
-    if os.path.getsize(file) > 25000000:
-        upsta = threading.Thread(target=lambda: upstatus(f'{message.id}upstatus.txt', msg), daemon=True)
-        upsta.start()
+    # اظهار نسبة الرفع دائماً مهما كان حجم الملف
+    upsta = threading.Thread(target=lambda: upstatus(f'{message.id}upstatus.txt', msg), daemon=True)
+    upsta.start()
     
     try:
         if not video:
@@ -130,7 +114,6 @@ def up(message, file, msg, video=False, capt="", thumb=None, duration=0, widht=0
         up(message, file, msg, video, capt, thumb, duration, widht, height, multi)
     except Exception as e:
         print(f"❌ Upload Error: {e}")
-    
     finally:
         if thumb is not None and os.path.exists(thumb):
             os.remove(thumb)
@@ -142,54 +125,72 @@ def up(message, file, msg, video=False, capt="", thumb=None, duration=0, widht=0
             except:
                 pass
 
-# --- دوال التقدم ---
+# --- دوال التقدم الجديدة (نسبة وتيرمنال) ---
 def uprogress(current, total, message):
+    percent = (current * 100 / total) if total else 0
+    now = time.time()
+    last_time = PROGRESS_TRACKER.get(f"u_{message.id}", 0)
+    
     try:
         with open(f'{message.id}upstatus.txt', "w") as fileup:
-            fileup.write(f"{current * 100 / total:.1f}%")
+            fileup.write(f"{percent:.1f}%")
     except:
         pass
+        
+    if now - last_time > 2.0 or current == total:
+        print(f"📤 رفع [رسالة: {message.id}] - نسبة: {percent:.1f}%  ({current}/{total} B)")
+        PROGRESS_TRACKER[f"u_{message.id}"] = now
 
 def dprogress(current, total, message):
+    percent = (current * 100 / total) if total else 0
+    now = time.time()
+    last_time = PROGRESS_TRACKER.get(f"d_{message.id}", 0)
+    
     try:
         with open(f'{message.id}downstatus.txt', "w") as fileup:
-            fileup.write(f"{current * 100 / total:.1f}%")
+            fileup.write(f"{percent:.1f}%")
     except:
         pass
+        
+    if now - last_time > 2.0 or current == total:
+        print(f"📥 تنزيل [رسالة: {message.id}] - نسبة: {percent:.1f}%  ({current}/{total} B)")
+        PROGRESS_TRACKER[f"d_{message.id}"] = now
 
 def upstatus(statusfile, message):
     while True:
         if os.path.exists(statusfile):
             break
-        time.sleep(5)
+        time.sleep(1)
     while os.path.exists(statusfile):
-        with open(statusfile, "r") as upread:
-            txt = upread.read()
         try:
-            safe_app_call(app.edit_message_text, message.chat.id, message.id, f"__Uploaded__ : **{txt}**")
-            time.sleep(10)
+            with open(statusfile, "r") as upread:
+                txt = upread.read()
+            if txt:
+                safe_app_call(app.edit_message_text, message.chat.id, message.id, f"📤 __جاري الرفع__ : **{txt}**")
+            time.sleep(4)
         except FloodWait as e:
             time.sleep(e.value)
         except:
-            time.sleep(5)
+            time.sleep(2)
 
 def downstatus(statusfile, message):
     while True:
         if os.path.exists(statusfile):
             break
-        time.sleep(5)
+        time.sleep(1)
     while os.path.exists(statusfile):
-        with open(statusfile, "r") as upread:
-            txt = upread.read()
         try:
-            safe_app_call(app.edit_message_text, message.chat.id, message.id, f"__Downloaded__ : **{txt}**")
-            time.sleep(10)
+            with open(statusfile, "r") as upread:
+                txt = upread.read()
+            if txt:
+                safe_app_call(app.edit_message_text, message.chat.id, message.id, f"📥 __جاري التنزيل__ : **{txt}**")
+            time.sleep(4)
         except FloodWait as e:
             time.sleep(e.value)
         except:
-            time.sleep(5)
+            time.sleep(2)
 
-# --- دوال لقطات الشاشة والألبوم ---
+# --- دوال لقطات الشاشة والألبوم الأوتوماتيكية ---
 def get_video_duration(filepath):
     try:
         cmd = f'ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "{filepath}"'
@@ -206,17 +207,12 @@ def download_and_ask_video(message, msg):
         return
     
     display_msg = down_msg if down_msg else msg
-    
-    # حجز نافذة التخزين لرقم هذه الرسالة بالتحديد لكي لا تتداخل الطلبات
     prompt_msg_id = display_msg.id
-    SS_STATES[prompt_msg_id] = {
-        "video_file": file, 
-        "video_msg": message, 
-        "user_id": message.from_user.id
-    }
+    
+    SS_STATES[prompt_msg_id] = {"video_file": file, "video_msg": message, "user_id": message.from_user.id}
     
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📸 استخراج لقطات شاشة", callback_data="ASK_SS")],
+        [InlineKeyboardButton("📸 استخراج لقطات شاشة بدقة عالية", callback_data="ASK_SS")],
         [InlineKeyboardButton("🎥 الإرسال كبث عادي (Stream)", callback_data="DO_STREAM_FILE")]
     ])
     
@@ -226,7 +222,6 @@ def download_and_ask_video(message, msg):
 
 def execute_screenshots(file, count, status_msg, prompt_msg_id, user_id, chat_id):
     try:
-        # جلب مدة الفيديو
         duration = get_video_duration(file)
         if not duration:
             try:
@@ -236,20 +231,17 @@ def execute_screenshots(file, count, status_msg, prompt_msg_id, user_id, chat_id
                 duration = 60.0
         
         images = []
-        # تقسيم مدة الفيديو لأجزاء متساوية (كما في كودك الأصلي تماماً لضمان توزع الصور)
         interval = duration / (count + 1)
         
         for i in range(1, count + 1):
             timestamp = interval * i
             out_img = f"ss_{user_id}_{prompt_msg_id}_{i}.jpg"
-            # التقاط الصورة من النقطة الزمنية بدقة عالية
             cmd = f'ffmpeg -y -ss {timestamp} -i "{file}" -vframes 1 -q:v 1 "{out_img}"'
             os.system(cmd)
             
             if os.path.exists(out_img) and os.path.getsize(out_img) > 0:
                 images.append(out_img)
 
-        # مسح فيديو المصدر فور الانتهاء
         if os.path.exists(file):
             os.remove(file) 
 
@@ -258,38 +250,29 @@ def execute_screenshots(file, count, status_msg, prompt_msg_id, user_id, chat_id
             SS_STATES.pop(prompt_msg_id, None)
             return
 
-        # تخزين الصور في الجلسة المخصصة للرسالة
         if prompt_msg_id in SS_STATES:
             SS_STATES[prompt_msg_id]["images"] = images
-            
-            # ========= التعديل هنا: الرفع التلقائي بدلاً من الزر =========
+
             safe_app_call(app.edit_message_text, status_msg.chat.id, status_msg.id, 
-                          f"✅ __تم استخراج **{len(images)}** لقطة بنجاح من أجزاء الفيديو!__\n\n📤 __جاري الرفع تلقائياً الآن...__")
+                          f"✅ __تم استخراج **{len(images)}** لقطة بنجاح!__\n\n📤 __جاري الرفع التلقائي كألبومات...__")
             
-            # جلب البيانات وبدء تشغيل دالة upload_screenshots تلقائياً
             user_data = SS_STATES.get(prompt_msg_id)
             ul_thread = threading.Thread(target=lambda: upload_screenshots(chat_id, prompt_msg_id, user_data, status_msg), daemon=True)
             ul_thread.start()
-            # ============================================================
 
     except Exception as e:
         print(f"Screenshot Extraction Error: {e}")
         safe_app_call(app.edit_message_text, status_msg.chat.id, status_msg.id, f"❌ __حدث خطأ أثناء الاستخراج: {e}__")
         if file and os.path.exists(file): os.remove(file)
         SS_STATES.pop(prompt_msg_id, None)
-        
+
 def upload_screenshots(chat_id, prompt_msg_id, user_data, msg):
     images = user_data.get("images", [])
     if not images: return
     
     try:
-        safe_app_call(app.edit_message_text, chat_id, msg.id, f"⏳ __جاري تقسيم الصور إلى ألبومات ورفعها (إجمالي {len(images)} صور)...__")
-        
-        # تقسيم الصور لـ دفعات (أقصى حد للألبوم في تليجرام هو 10 صور)
         media_chunks = [images[i:i + 10] for i in range(0, len(images), 10)]
-        
         for index, chunk in enumerate(media_chunks):
-            # تليجرام لا يقبل media_group تحتوي على ملف واحد فقط، فلو صادفنا ملف واحد نرفعه كصورة عادية
             if len(chunk) == 1:
                 safe_app_call(app.send_photo, chat_id, photo=chunk[0])
             else:
@@ -300,30 +283,25 @@ def upload_screenshots(chat_id, prompt_msg_id, user_data, msg):
                     time.sleep(e.value)
                     safe_app_call(app.send_media_group, chat_id, media=media_group)
             
-            # فاصل زمني لتجنب الحظر أو الضغط على السيرفر
             time.sleep(2.5)
 
         safe_app_call(app.delete_messages, chat_id, msg.id)
         
     except Exception as e:
         print(f"Album upload error: {e}")
-        # رفع احتياطي منفصل للصور في حالة الفشل كألبوم
         for img in images:
             safe_app_call(app.send_photo, chat_id, photo=img)
             time.sleep(1)
-        try:
-            safe_app_call(app.delete_messages, chat_id, msg.id)
+        try: safe_app_call(app.delete_messages, chat_id, msg.id)
         except: pass
     finally:
-        # مسح الصور من الذاكرة 
         for img in images:
             if os.path.exists(img):
                 os.remove(img)
-        # تنظيف الجلسة
         SS_STATES.pop(prompt_msg_id, None)
 
 
-# --- الدالة الرئيسية للمعالجة (مع Semaphore) ---
+# --- الدالة الرئيسية للمعالجة القديمة الخاصة بالبوت ---
 def follow(message, inputt, new, old, oldmessage):
     with task_semaphore:
         output = helperfunctions.updtname(inputt, new)
@@ -586,7 +564,7 @@ def follow(message, inputt, new, old, oldmessage):
             print(f"❌ Critical Error in follow: {e}")
             safe_app_call(app.send_message, message.chat.id, f"__Critical Error: {str(e)}__", reply_to_message_id=message.id)
 
-# --- باقي الدوال ---
+# --- باقي الدوال والميزات الأصلية الخاصة بالبوت ---
 def negetivetopostive(message, oldmessage):
     file = app.download_media(message)
     output = file.split("/")[-1]
@@ -632,20 +610,14 @@ def colorizeimage(message, oldmessage):
 def genrateimages(message, prompt, msg):
     try:
         safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
-    except Exception as e:
-        print(f"AI Image Gen Error: {e}")
+    except Exception as e: pass
 
 def genratemusic(message, prompt, msg):
     try:
         safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
-    except Exception as e:
-        print(f"AI Music Gen Error: {e}")
+    except Exception as e: pass
 
-def genratevideos(message, prompt):
-    try:
-        pass
-    except Exception as e:
-        print(f"AI Video Gen Error: {e}")
+def genratevideos(message, prompt): pass
 
 def dltmsg(umsg, rmsg, sec=15):
     time.sleep(sec)
@@ -653,8 +625,7 @@ def dltmsg(umsg, rmsg, sec=15):
         safe_app_call(app.delete_messages, umsg.chat.id, message_ids=[umsg.id, rmsg.id])
     except FloodWait as e:
         time.sleep(e.value)
-    except:
-        pass
+    except: pass
 
 def readf(message, oldmessage):
     file = app.download_media(message)
@@ -672,65 +643,48 @@ def readf(message, oldmessage):
     except Exception as e:
         safe_app_call(app.send_message, message.chat.id, f"__Error in Reading File : {e}__", reply_to_message_id=message.id)
     finally:
-        if os.path.exists(file):
-            os.remove(file)
-        try:
-            safe_app_call(app.delete_messages, message.chat.id, message_ids=oldmessage.id)
-        except:
-            pass
+        if os.path.exists(file): os.remove(file)
+        try: safe_app_call(app.delete_messages, message.chat.id, message_ids=oldmessage.id)
+        except: pass
 
 def send_local_video(original_message, local_video_path, processing_msg):
     try:
-        print(f"Sending local video: {local_video_path}")
         thumb, duration, width, height = mediainfo.allinfo(local_video_path)
         up(original_message, local_video_path, processing_msg, video=True,
            capt=f'**{local_video_path.split("/")[-1]}**',
            thumb=thumb, duration=duration, height=height, widht=width)
     except Exception as e:
-        print(f"Error in send_local_video: {e}")
         try:
             safe_app_call(app.send_message, original_message.chat.id, f"__Error sending converted video: {e}__", reply_to_message_id=original_message.id)
-            if processing_msg:
-                safe_app_call(app.delete_messages, original_message.chat.id, message_ids=processing_msg.id)
-        except:
-            pass
+            if processing_msg: safe_app_call(app.delete_messages, original_message.chat.id, message_ids=processing_msg.id)
+        except: pass
     finally:
-        if os.path.exists(local_video_path):
-            os.remove(local_video_path)
+        if os.path.exists(local_video_path): os.remove(local_video_path)
 
 def sendvideo(message, oldmessage):
     file, msg = down(message)
     if not file: return
     thumb, duration, width, height = mediainfo.allinfo(file)
     up(message, file, msg, video=True, capt=f'**{file.split("/")[-1]}**', thumb=thumb, duration=duration, height=height, widht=width)
-    try:
-        safe_app_call(app.delete_messages, message.chat.id, message_ids=oldmessage.id)
-    except:
-        pass
-    if os.path.exists(file):
-        os.remove(file)
+    try: safe_app_call(app.delete_messages, message.chat.id, message_ids=oldmessage.id)
+    except: pass
+    if os.path.exists(file): os.remove(file)
 
 def senddoc(message, oldmessage):
     file, msg = down(message)
     if not file: return
     up(message, file, msg)
-    try:
-        safe_app_call(app.delete_messages, message.chat.id, message_ids=oldmessage.id)
-    except:
-        pass
-    if os.path.exists(file):
-        os.remove(file)
+    try: safe_app_call(app.delete_messages, message.chat.id, message_ids=oldmessage.id)
+    except: pass
+    if os.path.exists(file): os.remove(file)
 
 def sendphoto(message, oldmessage):
     file = app.download_media(message)
     if not file: return
     safe_app_call(app.send_photo, message.chat.id, photo=file, reply_to_message_id=message.id)
-    try:
-        safe_app_call(app.delete_messages, message.chat.id, message_ids=oldmessage.id)
-    except:
-        pass
-    if os.path.exists(file):
-        os.remove(file)
+    try: safe_app_call(app.delete_messages, message.chat.id, message_ids=oldmessage.id)
+    except: pass
+    if os.path.exists(file): os.remove(file)
 
 def extract(message, oldm):
     file, msg = down(message)
@@ -747,8 +701,7 @@ def extract(message, oldm):
     if os.path.exists(foldername):
         dir_list = helperfunctions.absoluteFilePaths(foldername)
         if len(dir_list) > 30:
-            if msg is not None:
-                safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
+            if msg is not None: safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
             safe_app_call(app.send_message, message.chat.id, f"__Number of files is **{len(dir_list)}** which is more than the limit of **30**__", reply_to_message_id=message.id)
         else:
             for ele in dir_list:
@@ -757,8 +710,7 @@ def extract(message, oldm):
                     os.remove(ele)
                 else:
                     safe_app_call(app.send_message, message.chat.id, f'**{ele.split("/")[-1]}** __is Skipped because it is 0 bytes__', reply_to_message_id=message.id)
-            if msg is not None:
-                safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
+            if msg is not None: safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
             safe_app_call(app.send_message, message.chat.id, f'__{last}__', reply_to_message_id=message.id)
         shutil.rmtree(foldername)
     else:
@@ -877,8 +829,7 @@ def transcript(message, oldmessage):
     inputt = file.split("/")[-1]
     output = helperfunctions.updtname(inputt, "wav")
     temp = helperfunctions.updtname(inputt, "txt")
-    if file.endswith("wav"):
-        pass
+    if file.endswith("wav"): pass
     else:
         cmd = helperfunctions.ffmpegcommand(file, output, "wav")
         os.system(cmd)
@@ -890,10 +841,8 @@ def transcript(message, oldmessage):
     os.remove(file)
 
 def textTo3d(prompt, message, msg):
-    try:
-        safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
-    except Exception as e:
-        print(f"3D Gen Error: {e}")
+    try: safe_app_call(app.delete_messages, message.chat.id, message_ids=msg.id)
+    except Exception as e: pass
 
 def speak(message, oldmessage):
     file = app.download_media(message)
@@ -948,25 +897,18 @@ def other(message):
     if message.text in ["time", "Time", 'date', 'Date']:
         safe_app_call(app.send_message, message.chat.id, others.timeanddate(), reply_to_message_id=message.id)
     elif message.text[:5] == "b64d ":
-        try:
-            safe_app_call(app.send_message, message.chat.id, f'__{others.b64d(message.text[5:])}__', reply_to_message_id=message.id)
-        except:
-            safe_app_call(app.send_message, message.chat.id, "__Invalid__", reply_to_message_id=message.id)
+        try: safe_app_call(app.send_message, message.chat.id, f'__{others.b64d(message.text[5:])}__', reply_to_message_id=message.id)
+        except: safe_app_call(app.send_message, message.chat.id, "__Invalid__", reply_to_message_id=message.id)
     elif message.text[:5] == "b64e ":
-        try:
-            safe_app_call(app.send_message, message.chat.id, f'__{others.b64e(message.text[5:])}__', reply_to_message_id=message.id)
-        except:
-            safe_app_call(app.send_message, message.chat.id, "__Invalid__", reply_to_message_id=message.id)
+        try: safe_app_call(app.send_message, message.chat.id, f'__{others.b64e(message.text[5:])}__', reply_to_message_id=message.id)
+        except: safe_app_call(app.send_message, message.chat.id, "__Invalid__", reply_to_message_id=message.id)
     elif not message.text.isalnum():
         info = others.maths(message.text)
-        if info != None:
-            safe_app_call(app.send_message, message.chat.id, info, reply_to_message_id=message.id)
-        else:
-            handleAIChat(message)
-    else:
-        handleAIChat(message)
+        if info != None: safe_app_call(app.send_message, message.chat.id, info, reply_to_message_id=message.id)
+        else: handleAIChat(message)
+    else: handleAIChat(message)
 
-# --- معالجات الرسائل (Handlers) ---
+# --- معالجات الرسائل (Handlers) الأصلية ---
 @app.on_message(filters.command(['start']))
 def start(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
     safe_app_call(app.send_message, message.chat.id,
@@ -976,42 +918,32 @@ def start(client: pyrogram.client.Client, message: pyrogram.types.messages_and_m
 @app.on_message(filters.command(['detail']))
 def detail(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
     oldm = safe_app_call(app.send_message, message.chat.id, START_TEXT, reply_to_message_id=message.id)
-    if oldm:
-        dm = threading.Thread(target=lambda: dltmsg(message, oldm, 30), daemon=True)
-        dm.start()
+    if oldm: threading.Thread(target=lambda: dltmsg(message, oldm, 30), daemon=True).start()
 
 @app.on_message(filters.command(['help']))
 def help_cmd(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
     oldm = safe_app_call(app.send_message, message.chat.id,
                          "__Available Commands__\n**/start - To Check Availabe Conversions\n/help - Help Message\n/detail - Supported Extensions\n/imagegen - Text to Image\n/musicgen - Text to Music\n/3dgen - Text to 3D\n/bloom - AI Article Writter\n/cancel - To Cancel\n/rename - To Rename File\n/read - To Read File\n/make - To Make File\n/guess - Bot will Guess\n/tictactoe - To Play Tic Tac Toe\n/source - Github Source Code\n**",
                          reply_to_message_id=message.id)
-    if oldm:
-        dm = threading.Thread(target=lambda: dltmsg(message, oldm), daemon=True)
-        dm.start()
+    if oldm: threading.Thread(target=lambda: dltmsg(message, oldm), daemon=True).start()
 
 @app.on_message(filters.command(['source']))
 def source(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
     oldm = safe_app_call(app.send_message, message.chat.id, "**__GITHUB__ - https://github.com/bipinkrish/File-Converter-Bot**", disable_web_page_preview=True, reply_to_message_id=message.id)
-    if oldm:
-        dm = threading.Thread(target=lambda: dltmsg(message, oldm), daemon=True)
-        dm.start()
+    if oldm: threading.Thread(target=lambda: dltmsg(message, oldm), daemon=True).start()
 
 @app.on_message(filters.command(['rename']))
 def rename(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    try:
-        newname = message.text.split("/rename ")[1]
+    try: newname = message.text.split("/rename ")[1]
     except:
         safe_app_call(app.send_message, message.chat.id, "__Usage: **/rename new-file-name**\n(with extension)__", reply_to_message_id=message.id)
         return
     nmessage, msg_type = getSavedMsg(message)
     if nmessage:
         oldm = safe_app_call(app.send_message, message.chat.id, "__**Renaming**__", reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-        if oldm:
-            rn = threading.Thread(target=lambda: rname(nmessage, newname, oldm), daemon=True)
-            rn.start()
+        if oldm: threading.Thread(target=lambda: rname(nmessage, newname, oldm), daemon=True).start()
         removeSavedMsg(message)
-    else:
-        safe_app_call(app.send_message, message.chat.id, "__You need to send me a File first__", reply_to_message_id=message.id)
+    else: safe_app_call(app.send_message, message.chat.id, "__You need to send me a File first__", reply_to_message_id=message.id)
 
 @app.on_message(filters.command(['cancel']))
 def cancel(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
@@ -1020,45 +952,35 @@ def cancel(client: pyrogram.client.Client, message: pyrogram.types.messages_and_
         removeSavedMsg(message)
         safe_app_call(app.delete_messages, message.chat.id, message_ids=nmessage.id + 1)
         safe_app_call(app.send_message, message.chat.id, "__Your job was **Canceled**__", reply_markup=ReplyKeyboardRemove(), reply_to_message_id=message.id)
-    else:
-        safe_app_call(app.send_message, message.chat.id, "__No job to Cancel__", reply_to_message_id=message.id)
+    else: safe_app_call(app.send_message, message.chat.id, "__No job to Cancel__", reply_to_message_id=message.id)
 
 @app.on_message(filters.command(["imagegen"]))
 def getpompt(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    try:
-        prompt = message.text.split("/imagegen ")[1]
+    try: prompt = message.text.split("/imagegen ")[1]
     except:
         safe_app_call(app.send_message, message.chat.id, '__Send Prompt with Command,\nUsage :__ **/imagegen dog with funny hat**', reply_to_message_id=message.id)
         return
     msg = safe_app_call(app.send_message, message.chat.id, "__Prompt received and Request is sent. Waiting time is 1-2 mins__", reply_to_message_id=message.id)
-    if msg:
-        ai = threading.Thread(target=lambda: genrateimages(message, prompt, msg), daemon=True)
-        ai.start()
+    if msg: threading.Thread(target=lambda: genrateimages(message, prompt, msg), daemon=True).start()
 
 @app.on_message(filters.command(["musicgen"]))
 def getpompt_music(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    try:
-        prompt = message.text.split("/musicgen ")[1]
+    try: prompt = message.text.split("/musicgen ")[1]
     except:
         safe_app_call(app.send_message, message.chat.id, '__Send Prompt with Command,\nUsage :__ **/musicgen a slow, emotional piano ballad**', reply_to_message_id=message.id)
         return
     msg = safe_app_call(app.send_message, message.chat.id, "__Prompt received and Request is sent. Waiting time is 1 minute__", reply_to_message_id=message.id)
-    if msg:
-        mai = threading.Thread(target=lambda: genratemusic(message, prompt, msg), daemon=True)
-        mai.start()
+    if msg: threading.Thread(target=lambda: genratemusic(message, prompt, msg), daemon=True).start()
 
 @app.on_message(filters.command(['read']))
 def readcmd(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
     nmessage, msg_type = getSavedMsg(message)
-    if nmessage:
-        removeSavedMsg(message)
+    if nmessage: removeSavedMsg(message)
     else:
         safe_app_call(app.send_message, message.chat.id, '__First send me a File__', reply_to_message_id=message.id)
         return
     oldm = safe_app_call(app.send_message, message.chat.id, '__Reading File__', reply_to_message_id=message.id)
-    if oldm:
-        rf = threading.Thread(target=lambda: readf(nmessage, oldm), daemon=True)
-        rf.start()
+    if oldm: threading.Thread(target=lambda: readf(nmessage, oldm), daemon=True).start()
 
 @app.on_message(filters.command(['make']))
 def makecmd(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
@@ -1067,39 +989,31 @@ def makecmd(client: pyrogram.client.Client, message: pyrogram.types.messages_and
         removeSavedMsg(message)
         text = nmessage.text
     else:
-        try:
-            text = str(message.reply_to_message.text)
+        try: text = str(message.reply_to_message.text)
         except:
             safe_app_call(app.send_message, message.chat.id, '__You need to either first send me a Text message or reply to a Text message__', reply_to_message_id=message.id)
             return
     oldm = safe_app_call(app.send_message, message.chat.id, '__Making File__', reply_to_message_id=message.id)
-    if oldm:
-        mf = threading.Thread(target=lambda: makefile(message, text, oldm), daemon=True)
-        mf.start()
+    if oldm: threading.Thread(target=lambda: makefile(message, text, oldm), daemon=True).start()
 
 @app.on_message(filters.command(["3dgen"]))
 def send_gpt(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    try:
-        prompt = message.text.split("/3dgen ")[1]
+    try: prompt = message.text.split("/3dgen ")[1]
     except:
         safe_app_call(app.send_message, message.chat.id, '__Send Prompt with Command,\nUsage :__ **/3dgen a red motorcycle**', reply_to_message_id=message.id)
         return
     msg = safe_app_call(app.send_message, message.chat.id, "__3Dizing...__", reply_to_message_id=message.id)
-    if msg:
-        pnte = threading.Thread(target=lambda: textTo3d(prompt, message, msg), daemon=True)
-        pnte.start()
+    if msg: threading.Thread(target=lambda: textTo3d(prompt, message, msg), daemon=True).start()
 
 @app.on_message(filters.command("tictactoe"))
 def startTTT(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    if message.chat.id == message.from_user.id:
-        return tictactoe.TTTgame(app, None, message, 1)
+    if message.chat.id == message.from_user.id: return tictactoe.TTTgame(app, None, message, 1)
     else:
         msg = safe_app_call(app.send_message, message.chat.id, f'__Player 1 (X) : **{message.from_user.first_name}**__',
                             reply_markup=InlineKeyboardMarkup(
                                 [[InlineKeyboardButton(text='🤵 Player 2', callback_data="TTT P2")],
                                  [InlineKeyboardButton(text='🤖 v/s AI', callback_data="TTT AI")]]))
-        if msg:
-            tictactoe.TTTstoredata(msg.id, p1=message.from_user.id)
+        if msg: tictactoe.TTTstoredata(msg.id, p1=message.from_user.id)
 
 @app.on_message(filters.command(['guess']))
 def startG(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
@@ -1108,31 +1022,25 @@ def startG(client: pyrogram.client.Client, message: pyrogram.types.messages_and_
         if N > 1000:
             safe_app_call(app.send_message, message.chat.id, "**Not more than 1000**", reply_to_message_id=message.id)
             return
-    except:
-        N = 100
+    except: N = 100
     size = len(bin(N).replace("0b", ""))
     safe_app_call(app.send_message, message.chat.id,
                   f"__Take a Number between__ **1 - {N}**\n__I will guess it in__ **{size} steps**\n__are you__ **ready ?**",
                   reply_to_message_id=message.id,
-                  reply_markup=InlineKeyboardMarkup(
-                      [[InlineKeyboardButton(text='Yes', callback_data='G ready'),
-                        InlineKeyboardButton(text='No', callback_data='G not')]]))
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(text='Yes', callback_data='G ready'), InlineKeyboardButton(text='No', callback_data='G not')]]))
 
 @app.on_message(filters.command("bloom"))
 def bloomcmd(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    try:
-        para = message.reply_to_message.text
+    try: para = message.reply_to_message.text
     except:
-        try:
-            para = message.text.split("/bloom ")[1]
+        try: para = message.text.split("/bloom ")[1]
         except:
             safe_app_call(app.send_message, message.chat.id, '__Send Para with Command or Reply to it\nUsage :__ **/bloom A poem about the beauty of science**', reply_to_message_id=message.id)
             return
     msg = safe_app_call(app.send_message, message.chat.id, "__Blooming...__", reply_to_message_id=message.id)
-    if msg:
-        blm = threading.Thread(target=lambda: handelbloom(para, message, msg), daemon=True)
-        blm.start()
+    if msg: threading.Thread(target=lambda: handelbloom(para, message, msg), daemon=True).start()
 
+# --- قسم الأزرار المحدث بالكامل للقطات والفيديوهات ---
 @app.on_callback_query()
 def inbtwn(client: pyrogram.client.Client, call: pyrogram.types.CallbackQuery):
     if call.data[:4] == "TTT ":
@@ -1140,14 +1048,12 @@ def inbtwn(client: pyrogram.client.Client, call: pyrogram.types.CallbackQuery):
     elif call.data[:2] == "G ":
         return guess.Ggame(app, call)
         
-    # --- أوامر الفيديو واستخراج اللقطات بالأزرار ---
-    
     elif call.data == "DO_STREAM_FILE":
         prompt_msg_id = call.message.id
         user_data = SS_STATES.get(prompt_msg_id)
         if user_data and "video_file" in user_data:
             file = user_data["video_file"]
-            safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, "__جاري التحضير لإرسال الفيديو في هيئة بث Stream Format...__")
+            safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, "⏳ __جاري التحضير لإرسال الفيديو في هيئة بث Stream Format...__")
             thumb, duration, width, height = mediainfo.allinfo(file)
             up(user_data["video_msg"], file, call.message, video=True, capt=f'**{file.split("/")[-1]}**', thumb=thumb, duration=duration, height=height, widht=width)
             if os.path.exists(file):
@@ -1157,24 +1063,20 @@ def inbtwn(client: pyrogram.client.Client, call: pyrogram.types.CallbackQuery):
     elif call.data == "ASK_SS":
         prompt_msg_id = call.message.id
         if prompt_msg_id in SS_STATES:
-            # تكوين أزرار اختيار الأرقام من 10 إلى 100 
             buttons = []
             row = []
             for i in range(10, 101, 10):
-                # يمرر الرقم بداخل بيانات الزر
                 row.append(InlineKeyboardButton(f"🖼️ {i}", callback_data=f"SS_NUM_{i}"))
                 if len(row) == 5:
                     buttons.append(row)
                     row = []
-                    
             markup = InlineKeyboardMarkup(buttons)
             safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, 
-                          "💬 **كم عدد اللقطات التي تريد استخراجها من هذا الفيديو؟**\n__(اختر من الأزرار بالأسفل وسيتم إرسالها مقسمة في ألبومات متتالية)__",
+                          "💬 **كم عدد اللقطات التي تريد استخراجها من هذا الفيديو؟**\n__(اختر من الأزرار بالأسفل وسيتم الرفع تلقائيا كألبومات متتالية)__",
                           reply_markup=markup)
             
-    # استقبال طلبات أزرار الأرقام
     elif call.data.startswith("SS_NUM_"):
-        count = int(call.data.split("_")[2]) # استخراج الرقم من صيغة (SS_NUM_XX)
+        count = int(call.data.split("_")[2]) 
         prompt_msg_id = call.message.id
         user_data = SS_STATES.get(prompt_msg_id)
         if user_data and "video_file" in user_data:
@@ -1185,15 +1087,7 @@ def inbtwn(client: pyrogram.client.Client, call: pyrogram.types.CallbackQuery):
         else:
             safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, "❌ __عذراً، انتهت صلاحية هذا الملف، حاول من جديد.__")
 
-    elif call.data == "UPLOAD_SS":
-        prompt_msg_id = call.message.id
-        user_data = SS_STATES.get(prompt_msg_id)
-        if user_data and "images" in user_data:
-            ul_thread = threading.Thread(target=lambda: upload_screenshots(call.message.chat.id, prompt_msg_id, user_data, call.message), daemon=True)
-            ul_thread.start()
-        else:
-            safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, "❌ __عذراً، لم أجد صور جاهزة لرفعها، حاول من جديد.__")
-
+# --- باقي معالجات الرسائل والوسائط الخاصة بك ---
 @app.on_message(filters.document)
 def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
     saveMsg(message, "DOCUMENT")
@@ -1206,9 +1100,7 @@ def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_an
                                  '__Processing MOV file to send as video stream...__',
                                  reply_markup=ReplyKeyboardRemove(),
                                  reply_to_message_id=message.id)
-            if oldm:
-                sv = threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True)
-                sv.start()
+            if oldm: threading.Thread(target=lambda: sendvideo(message, oldm), daemon=True).start()
             removeSavedMsg(message)
             return
         else:
@@ -1220,12 +1112,9 @@ def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_an
                                 f'__Detected {dext} file. Automatically converting to {newext.upper()}...__',
                                 reply_markup=ReplyKeyboardRemove(),
                                 reply_to_message_id=message.id)
-            if msg:
-                conv = threading.Thread(target=lambda: follow(message, inputt, newext, oldext, msg), daemon=True)
-                conv.start()
+            if msg: threading.Thread(target=lambda: follow(message, inputt, newext, oldext, msg), daemon=True).start()
             removeSavedMsg(message)
             return
-    
     elif message.document.file_name.upper().endswith(IMG):
         print(f"Detected {dext} document (IMG), auto-converting to PNG.")
         inputt = message.document.file_name
@@ -1239,12 +1128,9 @@ def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_an
                             f'__Detected {dext} image file. Automatically converting to PNG...__',
                             reply_markup=ReplyKeyboardRemove(),
                             reply_to_message_id=message.id)
-        if msg:
-            conv = threading.Thread(target=lambda: follow(message, inputt, newext, oldext, msg), daemon=True)
-            conv.start()
+        if msg: threading.Thread(target=lambda: follow(message, inputt, newext, oldext, msg), daemon=True).start()
         removeSavedMsg(message)
         return
-    
     elif message.document.file_name.upper().endswith(LBW):
         safe_app_call(app.send_message, message.chat.id,
                       f'__Detected Extension:__ **{dext}** 💼\n__Now send extension to Convert to...__\n--**Available formats**--\n__{LBW_TEXT}__\n{message.from_user.mention} __choose or click /cancel to Cancel or use /rename  to  Rename__',
@@ -1271,9 +1157,7 @@ def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_an
                       reply_markup=ARCboard, reply_to_message_id=message.id)
     elif message.document.file_name.upper().endswith("TORRENT"):
         oldm = safe_app_call(app.send_message, message.chat.id, '__Getting Magnet Link__', reply_to_message_id=message.id)
-        if oldm:
-            ml = threading.Thread(target=lambda: getmag(message, oldm), daemon=True)
-            ml.start()
+        if oldm: threading.Thread(target=lambda: getmag(message, oldm), daemon=True).start()
         removeSavedMsg(message)
         return
     elif message.document.file_name.upper().endswith(SUB):
@@ -1299,9 +1183,7 @@ def annimations(client: pyrogram.client.Client, message: pyrogram.types.messages
                                    '__Processing animation: Converting to MOV and sending as video...__',
                                    reply_markup=ReplyKeyboardRemove(),
                                    reply_to_message_id=message.id)
-    if processing_msg:
-        conv_thread = threading.Thread(target=lambda: process_animation_to_video(message, processing_msg), daemon=True)
-        conv_thread.start()
+    if processing_msg: threading.Thread(target=lambda: process_animation_to_video(message, processing_msg), daemon=True).start()
 
 def process_animation_to_video(message, processing_msg):
     original_file = None
@@ -1311,15 +1193,11 @@ def process_animation_to_video(message, processing_msg):
         print("Processing animation...")
         original_file, down_msg = down(message)
         if down_msg:
-            try:
-                safe_app_call(app.edit_message_text, message.chat.id, down_msg.id, "__Download Complete. Converting to MOV...__")
-            except:
-                pass
+            try: safe_app_call(app.edit_message_text, message.chat.id, down_msg.id, "__Download Complete. Converting to MOV...__")
+            except: pass
             if down_msg.id != processing_msg.id:
-                try:
-                    safe_app_call(app.delete_messages, message.chat.id, message_ids=down_msg.id)
-                except:
-                    pass
+                try: safe_app_call(app.delete_messages, message.chat.id, message_ids=down_msg.id)
+                except: pass
         output_file = helperfunctions.updtname(original_file, new_ext)
         cmd = helperfunctions.ffmpegcommand(original_file, output_file, new_ext)
         print(f"Running FFmpeg command: {cmd}")
@@ -1334,31 +1212,23 @@ def process_animation_to_video(message, processing_msg):
             print(f"FFmpeg conversion failed. Return code: {return_code}")
             safe_app_call(app.send_message, message.chat.id, "__Error during animation conversion to MOV.__", reply_to_message_id=message.id)
             if processing_msg:
-                try:
-                    safe_app_call(app.delete_messages, message.chat.id, message_ids=processing_msg.id)
-                except:
-                    pass
+                try: safe_app_call(app.delete_messages, message.chat.id, message_ids=processing_msg.id)
+                except: pass
             if output_file and os.path.exists(output_file):
                 os.remove(output_file)
     except Exception as e:
         print(f"Error processing animation: {e}")
-        import traceback
-        traceback.print_exc()
         try:
             safe_app_call(app.send_message, message.chat.id, f"__An unexpected error occurred: {e}__", reply_to_message_id=message.id)
-            if processing_msg:
-                safe_app_call(app.delete_messages, message.chat.id, message_ids=processing_msg.id)
-        except:
-            pass
-        if original_file and os.path.exists(original_file):
-            os.remove(original_file)
-        if output_file and os.path.exists(output_file):
-            os.remove(output_file)
+            if processing_msg: safe_app_call(app.delete_messages, message.chat.id, message_ids=processing_msg.id)
+        except: pass
+        if original_file and os.path.exists(original_file): os.remove(original_file)
+        if output_file and os.path.exists(output_file): os.remove(output_file)
 
 @app.on_message(filters.video)
 def video(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
     saveMsg(message, "VIDEO")
-    oldm = safe_app_call(app.send_message, message.chat.id, '⏳ __جاري تحميل الفيديو، يرجى الانتظار لتلقي الخيارات...__\n__Downloading...__', reply_to_message_id=message.id)
+    oldm = safe_app_call(app.send_message, message.chat.id, '⏳ __جاري تحميل الفيديو، يرجى الانتظار...__\n__Downloading...__', reply_to_message_id=message.id)
     if oldm:
         dl_thread = threading.Thread(target=lambda: download_and_ask_video(message, oldm), daemon=True)
         dl_thread.start()
@@ -1396,13 +1266,8 @@ def photo(client: pyrogram.client.Client, message: pyrogram.types.messages_and_m
     inputt = "photo.jpg"
     oldext = "jpg"
     newext = "png"
-    msg = safe_app_call(app.send_message, message.chat.id,
-                        '__Detected photo. Automatically converting to PNG...__',
-                        reply_markup=ReplyKeyboardRemove(),
-                        reply_to_message_id=message.id)
-    if msg:
-        conv = threading.Thread(target=lambda: follow(message, inputt, newext, oldext, msg), daemon=True)
-        conv.start()
+    msg = safe_app_call(app.send_message, message.chat.id, '__Detected photo. Automatically converting to PNG...__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=message.id)
+    if msg: threading.Thread(target=lambda: follow(message, inputt, newext, oldext, msg), daemon=True).start()
 
 @app.on_message(filters.sticker)
 def sticker(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
@@ -1418,17 +1283,13 @@ def sticker(client: pyrogram.client.Client, message: pyrogram.types.messages_and
 
 @app.on_message(filters.text)
 def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
-    
-    # المسار الطبيعي لباقي الأوامر بعد التحويل الكامل لنظام الأزرار 
     if "https://t.me/" in message.text:
         mf = threading.Thread(target=lambda: saverec(message), daemon=True)
         mf.start()
         return
     if message.text[:8] == "magnet:?":
         oldm = safe_app_call(app.send_message, message.chat.id, '__Processing...__', reply_to_message_id=message.id)
-        if oldm:
-            tf = threading.Thread(target=lambda: gettorfile(message, oldm), daemon=True)
-            tf.start()
+        if oldm: threading.Thread(target=lambda: gettorfile(message, oldm), daemon=True).start()
         return
     
     nmessage, msg_type = getSavedMsg(message)
@@ -1438,74 +1299,46 @@ def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_me
         
         if "COLOR" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Processing__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                col = threading.Thread(target=lambda: colorizeimage(nmessage, oldm), daemon=True)
-                col.start()
+            if oldm: threading.Thread(target=lambda: colorizeimage(nmessage, oldm), daemon=True).start()
         elif "POSITIVE" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Processing__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                pos = threading.Thread(target=lambda: negetivetopostive(nmessage, oldm), daemon=True)
-                pos.start()
+            if oldm: threading.Thread(target=lambda: negetivetopostive(nmessage, oldm), daemon=True).start()
         elif "READ" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Reading File__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                rf = threading.Thread(target=lambda: readf(nmessage, oldm), daemon=True)
-                rf.start()
+            if oldm: threading.Thread(target=lambda: readf(nmessage, oldm), daemon=True).start()
         elif "SENDPHOTO" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Sending in Photo Format__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                sp = threading.Thread(target=lambda: sendphoto(nmessage, oldm), daemon=True)
-                sp.start()
+            if oldm: threading.Thread(target=lambda: sendphoto(nmessage, oldm), daemon=True).start()
         elif "SENDDOC" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Sending in Document Format__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                sd = threading.Thread(target=lambda: senddoc(nmessage, oldm), daemon=True)
-                sd.start()
+            if oldm: threading.Thread(target=lambda: senddoc(nmessage, oldm), daemon=True).start()
         elif "SENDVID" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Sending in Stream Format__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                sv = threading.Thread(target=lambda: sendvideo(nmessage, oldm), daemon=True)
-                sv.start()
+            if oldm: threading.Thread(target=lambda: sendvideo(nmessage, oldm), daemon=True).start()
         elif "SpeechToText" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Transcripting, takes long time for Long Files__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                stt = threading.Thread(target=lambda: transcript(nmessage, oldm), daemon=True)
-                stt.start()
+            if oldm: threading.Thread(target=lambda: transcript(nmessage, oldm), daemon=True).start()
         elif "TextToSpeech" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Generating Speech__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                tts = threading.Thread(target=lambda: speak(nmessage, oldm), daemon=True)
-                tts.start()
+            if oldm: threading.Thread(target=lambda: speak(nmessage, oldm), daemon=True).start()
         elif "UPSCALE" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Upscaling Your Image__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                upscl = threading.Thread(target=lambda: increaseres(nmessage, oldm), daemon=True)
-                upscl.start()
+            if oldm: threading.Thread(target=lambda: increaseres(nmessage, oldm), daemon=True).start()
         elif "EXTRACT" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Extracting File__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                ex = threading.Thread(target=lambda: extract(nmessage, oldm), daemon=True)
-                ex.start()
+            if oldm: threading.Thread(target=lambda: extract(nmessage, oldm), daemon=True).start()
         elif "COMPILE" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Compiling__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                cmp = threading.Thread(target=lambda: compile(nmessage, oldm), daemon=True)
-                cmp.start()
+            if oldm: threading.Thread(target=lambda: compile(nmessage, oldm), daemon=True).start()
         elif "SCAN" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Scanning__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                scn = threading.Thread(target=lambda: scan(nmessage, oldm), daemon=True)
-                scn.start()
+            if oldm: threading.Thread(target=lambda: scan(nmessage, oldm), daemon=True).start()
         elif "RUN" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Running__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                rpro = threading.Thread(target=lambda: runpro(nmessage, oldm), daemon=True)
-                rpro.start()
+            if oldm: threading.Thread(target=lambda: runpro(nmessage, oldm), daemon=True).start()
         elif "BG REMOVE" == message.text:
             oldm = safe_app_call(app.send_message, message.chat.id, '__Background Removing__', reply_markup=ReplyKeyboardRemove(), reply_to_message_id=nmessage.id)
-            if oldm:
-                bgrm = threading.Thread(target=lambda: bgremove(nmessage, oldm), daemon=True)
-                bgrm.start()
+            if oldm: threading.Thread(target=lambda: bgremove(nmessage, oldm), daemon=True).start()
         elif msg_type == "DOCUMENT":
             inputt = nmessage.document.file_name
             print("File is a Document")
@@ -1520,10 +1353,8 @@ def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_me
             inputt = "voice.ogg"
             print("File is a Voice")
         elif msg_type == "STICKER":
-            if (not nmessage.sticker.is_animated) and (not nmessage.sticker.is_video):
-                inputt = nmessage.sticker.set_name + ".webp"
-            else:
-                inputt = nmessage.sticker.set_name + ".tgs"
+            if (not nmessage.sticker.is_animated) and (not nmessage.sticker.is_video): inputt = nmessage.sticker.set_name + ".webp"
+            else: inputt = nmessage.sticker.set_name + ".tgs"
             print("File is a Sticker")
         elif msg_type == "VIDEO":
             try:
@@ -1551,9 +1382,7 @@ def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_me
             safe_app_call(app.send_message, message.chat.id, "__Nice try, Don't choose same Extension__", reply_to_message_id=nmessage.id, reply_markup=ReplyKeyboardRemove())
         else:
             msg = safe_app_call(app.send_message, message.chat.id, f'Converting from **{oldext.upper()}** to **{newext.upper()}**', reply_to_message_id=nmessage.id, reply_markup=ReplyKeyboardRemove())
-            if msg:
-                conv = threading.Thread(target=lambda: follow(nmessage, inputt, newext, oldext, msg), daemon=True)
-                conv.start()
+            if msg: threading.Thread(target=lambda: follow(nmessage, inputt, newext, oldext, msg), daemon=True).start()
     else:
         if str(message.from_user.id) == str(message.chat.id):
             if len(message.text.split("\n")) == 1:
@@ -1567,5 +1396,5 @@ def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_me
 
 # --- تشغيل البوت ---
 if __name__ == "__main__":
-    print("Bot Started with FloodWait Protection & Multi-Video Support + Number Buttons")
+    print("Bot Successfully Started!")
     app.run()
