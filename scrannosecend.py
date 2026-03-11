@@ -226,6 +226,7 @@ def download_and_ask_video(message, msg):
 
 def execute_screenshots(file, count, status_msg, prompt_msg_id, user_id, chat_id):
     try:
+        # جلب مدة الفيديو
         duration = get_video_duration(file)
         if not duration:
             try:
@@ -235,12 +236,13 @@ def execute_screenshots(file, count, status_msg, prompt_msg_id, user_id, chat_id
                 duration = 60.0
         
         images = []
+        # تقسيم مدة الفيديو لأجزاء متساوية (كما في كودك الأصلي تماماً لضمان توزع الصور)
         interval = duration / (count + 1)
         
         for i in range(1, count + 1):
             timestamp = interval * i
             out_img = f"ss_{user_id}_{prompt_msg_id}_{i}.jpg"
-            # استخدام -q:v 1 يعطي أعلى دقة وجودة لملف الصورة JPEG
+            # التقاط الصورة من النقطة الزمنية بدقة عالية
             cmd = f'ffmpeg -y -ss {timestamp} -i "{file}" -vframes 1 -q:v 1 "{out_img}"'
             os.system(cmd)
             
@@ -256,21 +258,26 @@ def execute_screenshots(file, count, status_msg, prompt_msg_id, user_id, chat_id
             SS_STATES.pop(prompt_msg_id, None)
             return
 
-        # تخزين الصور في نافذة الرسالة المخصصة 
+        # تخزين الصور في الجلسة المخصصة للرسالة
         if prompt_msg_id in SS_STATES:
             SS_STATES[prompt_msg_id]["images"] = images
-
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("📤 رفع اللقطات كألبومات", callback_data="UPLOAD_SS")]])
-        safe_app_call(app.edit_message_text, status_msg.chat.id, status_msg.id, 
-                      f"✅ __تم الانتهاء بنجاح!__\n\nتم استخراج **{len(images)}** لقطات بدقة عالية.\n__اضغط على الزر بالأسفل للبدء بالرفع كألبومات.__", 
-                      reply_markup=markup)
+            
+            # ========= التعديل هنا: الرفع التلقائي بدلاً من الزر =========
+            safe_app_call(app.edit_message_text, status_msg.chat.id, status_msg.id, 
+                          f"✅ __تم استخراج **{len(images)}** لقطة بنجاح من أجزاء الفيديو!__\n\n📤 __جاري الرفع تلقائياً الآن...__")
+            
+            # جلب البيانات وبدء تشغيل دالة upload_screenshots تلقائياً
+            user_data = SS_STATES.get(prompt_msg_id)
+            ul_thread = threading.Thread(target=lambda: upload_screenshots(chat_id, prompt_msg_id, user_data, status_msg), daemon=True)
+            ul_thread.start()
+            # ============================================================
 
     except Exception as e:
         print(f"Screenshot Extraction Error: {e}")
         safe_app_call(app.edit_message_text, status_msg.chat.id, status_msg.id, f"❌ __حدث خطأ أثناء الاستخراج: {e}__")
         if file and os.path.exists(file): os.remove(file)
         SS_STATES.pop(prompt_msg_id, None)
-
+        
 def upload_screenshots(chat_id, prompt_msg_id, user_data, msg):
     images = user_data.get("images", [])
     if not images: return
