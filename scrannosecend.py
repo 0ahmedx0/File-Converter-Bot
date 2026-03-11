@@ -35,7 +35,10 @@ task_semaphore = threading.Semaphore(MAX_CONCURRENT_TASKS)
 # --- تهيئة البوت ---
 app = Client("my_bot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 MESGS = {}
-# حالة طلبات لقطات الفيديو
+
+# حالة طلبات لقطات الفيديو 
+# يتم حفظ الحالة بناءً على الـ Message ID (رقم رسالة البوت التي تحوي الأزرار) بدلاً من المستخدم
+# لتتمكن من رفع والتعامل مع عدة فيديوهات في نفس الوقت بدون أن تحذف بعضها
 SS_STATES = {}
 
 # --- دوال مساعدة لإدارة الرسائل ---
@@ -202,20 +205,26 @@ def download_and_ask_video(message, msg):
         safe_app_call(app.edit_message_text, message.chat.id, msg.id, "❌ __فشل تحميل الفيديو.__")
         return
     
-    user_id = message.from_user.id
-    SS_STATES[user_id] = {"video_file": file, "video_msg": message, "state": "WAITING_BTN"}
+    display_msg = down_msg if down_msg else msg
+    
+    # حجز نافذة التخزين لرقم هذه الرسالة بالتحديد لكي لا تتداخل الطلبات
+    prompt_msg_id = display_msg.id
+    SS_STATES[prompt_msg_id] = {
+        "video_file": file, 
+        "video_msg": message, 
+        "user_id": message.from_user.id
+    }
     
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📸 استخراج لقطات شاشة بدقة عالية جداً", callback_data="ASK_SS")],
+        [InlineKeyboardButton("📸 استخراج لقطات شاشة", callback_data="ASK_SS")],
         [InlineKeyboardButton("🎥 الإرسال كبث عادي (Stream)", callback_data="DO_STREAM_FILE")]
     ])
     
-    display_msg = down_msg if down_msg else msg
-    safe_app_call(app.edit_message_text, message.chat.id, display_msg.id, 
+    safe_app_call(app.edit_message_text, message.chat.id, prompt_msg_id, 
                   '✅ **تم الانتهاء من تحميل الفيديو.**\n\n__اختر الإجراء الذي تريده:__', 
                   reply_markup=markup)
 
-def execute_screenshots(file, count, status_msg, user_id, chat_id):
+def execute_screenshots(file, count, status_msg, prompt_msg_id, user_id, chat_id):
     try:
         duration = get_video_duration(file)
         if not duration:
@@ -230,8 +239,8 @@ def execute_screenshots(file, count, status_msg, user_id, chat_id):
         
         for i in range(1, count + 1):
             timestamp = interval * i
-            out_img = f"ss_{user_id}_{i}.jpg"
-            # استخدام -q:v 1 يعطي أعلى دقة وجودة لملف الصورة JPEG شبه معدومة الضغط
+            out_img = f"ss_{user_id}_{prompt_msg_id}_{i}.jpg"
+            # استخدام -q:v 1 يعطي أعلى دقة وجودة لملف الصورة JPEG
             cmd = f'ffmpeg -y -ss {timestamp} -i "{file}" -vframes 1 -q:v 1 "{out_img}"'
             os.system(cmd)
             
@@ -244,13 +253,14 @@ def execute_screenshots(file, count, status_msg, user_id, chat_id):
 
         if not images:
             safe_app_call(app.edit_message_text, status_msg.chat.id, status_msg.id, "❌ __فشل استخراج لقطات الشاشة.__")
-            SS_STATES.pop(user_id, None)
+            SS_STATES.pop(prompt_msg_id, None)
             return
 
-        SS_STATES[user_id]["images"] = images
-        SS_STATES[user_id]["state"] = "READY_TO_UPLOAD"
+        # تخزين الصور في نافذة الرسالة المخصصة 
+        if prompt_msg_id in SS_STATES:
+            SS_STATES[prompt_msg_id]["images"] = images
 
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("📤 رفع اللقطات تلقائياً في ألبومات متتالية", callback_data="UPLOAD_SS")]])
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("📤 رفع اللقطات كألبومات", callback_data="UPLOAD_SS")]])
         safe_app_call(app.edit_message_text, status_msg.chat.id, status_msg.id, 
                       f"✅ __تم الانتهاء بنجاح!__\n\nتم استخراج **{len(images)}** لقطات بدقة عالية.\n__اضغط على الزر بالأسفل للبدء بالرفع كألبومات.__", 
                       reply_markup=markup)
@@ -259,9 +269,9 @@ def execute_screenshots(file, count, status_msg, user_id, chat_id):
         print(f"Screenshot Extraction Error: {e}")
         safe_app_call(app.edit_message_text, status_msg.chat.id, status_msg.id, f"❌ __حدث خطأ أثناء الاستخراج: {e}__")
         if file and os.path.exists(file): os.remove(file)
-        SS_STATES.pop(user_id, None)
+        SS_STATES.pop(prompt_msg_id, None)
 
-def upload_screenshots(chat_id, user_id, user_data, msg):
+def upload_screenshots(chat_id, prompt_msg_id, user_data, msg):
     images = user_data.get("images", [])
     if not images: return
     
@@ -272,7 +282,7 @@ def upload_screenshots(chat_id, user_id, user_data, msg):
         media_chunks = [images[i:i + 10] for i in range(0, len(images), 10)]
         
         for index, chunk in enumerate(media_chunks):
-            # تليجرام لا يقبل media_group تحتوي على ملف واحد فقط، فلو صادفنا ملف واحد بالدفعة نرفعه كصورة عادية
+            # تليجرام لا يقبل media_group تحتوي على ملف واحد فقط، فلو صادفنا ملف واحد نرفعه كصورة عادية
             if len(chunk) == 1:
                 safe_app_call(app.send_photo, chat_id, photo=chunk[0])
             else:
@@ -283,14 +293,14 @@ def upload_screenshots(chat_id, user_id, user_data, msg):
                     time.sleep(e.value)
                     safe_app_call(app.send_media_group, chat_id, media=media_group)
             
-            # فاصل زمني لتجنب باند التليجرام أو ضغط الخوادم
+            # فاصل زمني لتجنب الحظر أو الضغط على السيرفر
             time.sleep(2.5)
 
         safe_app_call(app.delete_messages, chat_id, msg.id)
         
     except Exception as e:
         print(f"Album upload error: {e}")
-        # احتياطياً في حال تعذر الرفع المجمع 
+        # رفع احتياطي منفصل للصور في حالة الفشل كألبوم
         for img in images:
             safe_app_call(app.send_photo, chat_id, photo=img)
             time.sleep(1)
@@ -298,12 +308,12 @@ def upload_screenshots(chat_id, user_id, user_data, msg):
             safe_app_call(app.delete_messages, chat_id, msg.id)
         except: pass
     finally:
-        # التنظيف الكامل للذاكرة من ملفات الصور
+        # مسح الصور من الذاكرة 
         for img in images:
             if os.path.exists(img):
                 os.remove(img)
-        # إنهاء جلسة العضو
-        SS_STATES.pop(user_id, None)
+        # تنظيف الجلسة
+        SS_STATES.pop(prompt_msg_id, None)
 
 
 # --- الدالة الرئيسية للمعالجة (مع Semaphore) ---
@@ -1123,32 +1133,59 @@ def inbtwn(client: pyrogram.client.Client, call: pyrogram.types.CallbackQuery):
     elif call.data[:2] == "G ":
         return guess.Ggame(app, call)
         
-    # أوامر زر الفيديو واللقطات
+    # --- أوامر الفيديو واستخراج اللقطات بالأزرار ---
+    
     elif call.data == "DO_STREAM_FILE":
-        user_data = SS_STATES.get(call.from_user.id)
+        prompt_msg_id = call.message.id
+        user_data = SS_STATES.get(prompt_msg_id)
         if user_data and "video_file" in user_data:
             file = user_data["video_file"]
-            safe_app_call(app.edit_message_text, call.message.chat.id, call.message.id, "__جاري التحضير لإرسال الفيديو في هيئة بث Stream Format...__")
+            safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, "__جاري التحضير لإرسال الفيديو في هيئة بث Stream Format...__")
             thumb, duration, width, height = mediainfo.allinfo(file)
             up(user_data["video_msg"], file, call.message, video=True, capt=f'**{file.split("/")[-1]}**', thumb=thumb, duration=duration, height=height, widht=width)
             if os.path.exists(file):
                 os.remove(file)
-            SS_STATES.pop(call.from_user.id, None)
+            SS_STATES.pop(prompt_msg_id, None)
 
     elif call.data == "ASK_SS":
-        user_data = SS_STATES.get(call.from_user.id)
-        if user_data:
-            SS_STATES[call.from_user.id]["state"] = "WAITING_COUNT"
-            safe_app_call(app.edit_message_text, call.message.chat.id, call.message.id, 
-                          "💬 **أرسل الآن كم عدد اللقطات التي تريد استخراجها من هذا الفيديو؟**\n__(الرجاء إرسال رقم صحيح بين 1 و 100 وسيتم إرسالها مقسمة في ألبومات متتالية)__")
+        prompt_msg_id = call.message.id
+        if prompt_msg_id in SS_STATES:
+            # تكوين أزرار اختيار الأرقام من 10 إلى 100 
+            buttons = []
+            row = []
+            for i in range(10, 101, 10):
+                # يمرر الرقم بداخل بيانات الزر
+                row.append(InlineKeyboardButton(f"🖼️ {i}", callback_data=f"SS_NUM_{i}"))
+                if len(row) == 5:
+                    buttons.append(row)
+                    row = []
+                    
+            markup = InlineKeyboardMarkup(buttons)
+            safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, 
+                          "💬 **كم عدد اللقطات التي تريد استخراجها من هذا الفيديو؟**\n__(اختر من الأزرار بالأسفل وسيتم إرسالها مقسمة في ألبومات متتالية)__",
+                          reply_markup=markup)
             
+    # استقبال طلبات أزرار الأرقام
+    elif call.data.startswith("SS_NUM_"):
+        count = int(call.data.split("_")[2]) # استخراج الرقم من صيغة (SS_NUM_XX)
+        prompt_msg_id = call.message.id
+        user_data = SS_STATES.get(prompt_msg_id)
+        if user_data and "video_file" in user_data:
+            safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, f"⏳ __جاري استخراج {count} لقطات بدقة...__")
+            file = user_data["video_file"]
+            ss_thread = threading.Thread(target=lambda: execute_screenshots(file, count, call.message, prompt_msg_id, call.from_user.id, call.message.chat.id), daemon=True)
+            ss_thread.start()
+        else:
+            safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, "❌ __عذراً، انتهت صلاحية هذا الملف، حاول من جديد.__")
+
     elif call.data == "UPLOAD_SS":
-        user_data = SS_STATES.get(call.from_user.id)
+        prompt_msg_id = call.message.id
+        user_data = SS_STATES.get(prompt_msg_id)
         if user_data and "images" in user_data:
-            ul_thread = threading.Thread(target=lambda: upload_screenshots(call.message.chat.id, call.from_user.id, user_data, call.message), daemon=True)
+            ul_thread = threading.Thread(target=lambda: upload_screenshots(call.message.chat.id, prompt_msg_id, user_data, call.message), daemon=True)
             ul_thread.start()
         else:
-            safe_app_call(app.edit_message_text, call.message.chat.id, call.message.id, "❌ __عذراً، لم أجد صور جاهزة لرفعها، حاول من جديد.__")
+            safe_app_call(app.edit_message_text, call.message.chat.id, prompt_msg_id, "❌ __عذراً، لم أجد صور جاهزة لرفعها، حاول من جديد.__")
 
 @app.on_message(filters.document)
 def documnet(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
@@ -1375,31 +1412,7 @@ def sticker(client: pyrogram.client.Client, message: pyrogram.types.messages_and
 @app.on_message(filters.text)
 def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
     
-    # اعتراض إرسال النص في حالة لو أن المستخدم بصدد إدخال عدد لقطات الشاشة
-    user_id = message.from_user.id
-    if user_id in SS_STATES and SS_STATES[user_id].get("state") == "WAITING_COUNT":
-        try:
-            count = int(message.text.strip())
-            # تغيير الحد الأقصى هنا إلى 100
-            if count < 1 or count > 100:
-                safe_app_call(app.send_message, message.chat.id, "❌ __الرجاء إدخال رقم بين 1 و 100 فقط.__", reply_to_message_id=message.id)
-                return
-        except ValueError:
-            safe_app_call(app.send_message, message.chat.id, "❌ __الرجاء إرسال رقم صحيح وليس نصوصاً.__", reply_to_message_id=message.id)
-            return
-        
-        # تغيير الحالة لتجنب المدخلات المكررة والبدء بالتنفيذ
-        SS_STATES[user_id]["state"] = "PROCESSING"
-        file = SS_STATES[user_id]["video_file"]
-        
-        msg = safe_app_call(app.send_message, message.chat.id, f"⏳ __جاري استخراج {count} لقطات متعددة بدقة، الرجاء الانتظار قليلاً...__", reply_to_message_id=message.id)
-        
-        # بدء عملية اللقطات بالخلفية عبر Thread
-        ss_thread = threading.Thread(target=lambda: execute_screenshots(file, count, msg, user_id, message.chat.id), daemon=True)
-        ss_thread.start()
-        return
-
-    # المسار الطبيعي لباقي الأوامر
+    # المسار الطبيعي لباقي الأوامر بعد التحويل الكامل لنظام الأزرار 
     if "https://t.me/" in message.text:
         mf = threading.Thread(target=lambda: saverec(message), daemon=True)
         mf.start()
@@ -1547,5 +1560,5 @@ def text(client: pyrogram.client.Client, message: pyrogram.types.messages_and_me
 
 # --- تشغيل البوت ---
 if __name__ == "__main__":
-    print("Bot Started with FloodWait Protection & Semaphore & Auto High-Res Screenshots in Multiple Albums Support")
+    print("Bot Started with FloodWait Protection & Multi-Video Support + Number Buttons")
     app.run()
